@@ -1,7 +1,11 @@
 <?php
         # Retrieve settings from Parameter Store
         error_log('Retrieving settings');
-        require 'aws-autoloader.php';
+        
+        # Only load AWS SDK if file exists (for AWS production environment)
+        if (file_exists('aws-autoloader.php')) {
+            require 'aws-autoloader.php';
+        }
       
         #$az = file_get_contents('http://169.254.169.254/latest/meta-data/placement/availability-zone');
 
@@ -37,46 +41,52 @@
         $region = substr($az, 0, -1);
         
         try {
-        $secrets_client = new Aws\SecretsManager\SecretsManagerClient([
-          'version' => 'latest',
-          'region'  => $region
-        ]);
-        #fetch the endpoint ep
-        $rds_client = new  Aws\Rds\RdsClient([
-          'version' => 'latest',
-          'region'  => $region
-        ]);
-        $dbresult = $rds_client->describeDBInstances();
-        $dbresult = $dbresult['DBInstances'][0]['Endpoint']['Address'];
-        $ep = $dbresult;
-        #echo $ep;
-        #
-        #fetch secrets for the endpoint
-        $secretresults = $secrets_client->listSecrets(array(
-          ['Key'=>['name'],
-          'Values'=>['rds!']
-          ])
-          );
-          $result = $secrets_client->getSecretValue([
-            'SecretId' => $secretresults['SecretList'][0]['Name'],
-        ]);
-        $result = $result['SecretString'];
-        $result = json_decode($result, true);
-  #      echo $result;
+        // Only try AWS if the SDK is loaded
+        if (class_exists('Aws\SecretsManager\SecretsManagerClient')) {
+            $secrets_client = new Aws\SecretsManager\SecretsManagerClient([
+              'version' => 'latest',
+              'region'  => $region
+            ]);
+            #fetch the endpoint ep
+            $rds_client = new  Aws\Rds\RdsClient([
+              'version' => 'latest',
+              'region'  => $region
+            ]);
+            $dbresult = $rds_client->describeDBInstances();
+            $dbresult = $dbresult['DBInstances'][0]['Endpoint']['Address'];
+            $ep = $dbresult;
+            #echo $ep;
+            #
+            #fetch secrets for the endpoint
+            $secretresults = $secrets_client->listSecrets(array(
+              ['Key'=>['name'],
+              'Values'=>['rds!']
+              ])
+              );
+              $result = $secrets_client->getSecretValue([
+                'SecretId' => $secretresults['SecretList'][0]['Name'],
+            ]);
+            $result = $result['SecretString'];
+            $result = json_decode($result, true);
+      #      echo $result;
 
-        #$result = $result['SecretString'];
-   #     print($result);
-        #$result = json_decode($result, true);
-        $un = $result['username'];
-        $pw = $result['password'];
-        $db = 'countries';
+            #$result = $result['SecretString'];
+       #     print($result);
+            #$result = json_decode($result, true);
+            $un = $result['username'];
+            $pw = $result['password'];
+            $db = 'countries';
+        } else {
+            // AWS SDK not available, throw exception to use local credentials
+            throw new Exception('AWS SDK not available');
+        }
 
         }
         catch (Exception $e) {
-          $ep = '';
-          $db = '';
-          $un = '';
-          $pw = '';
+          $ep = 'localhost';        // Your database host
+          $db = 'countries';        // Your database name
+          $un = 'webapp_user';      // Your database username
+          $pw = 'your_password';    // CHANGE THIS to your actual database password!
         }
       error_log('Settings are: ' . $ep. " / " . $db . " / " . $un . " / " . $pw);
       #echo " Check your Database settings ";

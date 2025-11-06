@@ -1,0 +1,32 @@
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+error.log
+access.log
+
+# Temporary files
+*.tmp
+*.temp
+*.cache
+
+# Database
+*.sql.backup
+*.db
+
+# PHP
+vendor/
+composer.lock
+
+# AWS credentials
+.aws/
+aws-credentials.json

@@ -238,49 +238,30 @@ sudo chmod -R 755 /var/www/html/
 
 ### Step 3: Configure Database Connection
 
-The application uses AWS services by default. For local development without AWS, you need to modify the database connection.
-
-**Option A: Use Local Database (Recommended for local development)**
-
-Create a new file `/var/www/html/local-config.php`:
+Edit the `get-parameters.php` file to set your local database credentials:
 
 ```bash
-sudo nano /var/www/html/local-config.php
+cd /home/zackweb/Desktop/DevSecOps-Research-Project/app
+nano get-parameters.php
 ```
 
-Add this content (replace with your actual database credentials):
+Find the `catch (Exception $e)` block (around line 75) and update it with your database credentials:
 
 ```php
-<?php
-// Local database configuration
-$ep = 'localhost';
-$db = 'countries';
-$un = 'webapp_user';
-$pw = 'your_password';  // Replace with your actual password
-?>
+catch (Exception $e) {
+  $ep = 'localhost';           // Database host
+  $db = 'countries';           // Database name
+  $un = 'webapp_user';         // Database username
+  $pw = 'your_actual_password'; // CHANGE THIS to your database password!
+}
 ```
 
-Then modify each query file (mobile.php, population.php, etc.) to include this config instead of `get-parameters.php`:
+**Important:** Use the **same password** you set when creating the database user!
 
-```bash
-# For local development, comment out AWS parameters
-sudo sed -i 's/include '\''get-parameters.php'\'';/\/\/ include '\''get-parameters.php'\'';\ninclude '\''local-config.php'\'';/' /var/www/html/query2.php
-```
-
-**Option B: Use AWS Services (For production deployment)**
-
-The application is configured to use:
-- AWS RDS for database
-- AWS Secrets Manager for credentials
-- EC2 Instance Metadata Service
-
-You'll need to:
-1. Deploy the application on an EC2 instance
-2. Create an RDS MariaDB instance
-3. Store credentials in AWS Secrets Manager
-4. Configure IAM roles and policies
-
-### Step 4: Configure SELinux (if enabled)
+This configuration works by:
+1. First trying to connect to AWS services (for production deployments)
+2. When AWS is not available (local development), it falls back to these hardcoded values
+3. All query files will use these credentials through the variables: `$ep`, `$db`, `$un`, `$pw`
 
 **Note:** Ubuntu uses AppArmor instead of SELinux by default. Usually no additional configuration is needed, but if you have issues, you can check AppArmor status:
 
@@ -295,7 +276,7 @@ If you need to allow Apache database connections and are using AppArmor:
 sudo aa-complain /etc/apparmor.d/usr.sbin.apache2
 ```
 
-### Step 5: Configure Firewall (UFW)
+### Step 4: Configure Firewall (UFW)
 
 ```bash
 sudo ufw allow 'Apache'
@@ -451,11 +432,11 @@ sudo systemctl restart apache2
 ```
 DevSecOps-Research-Project/
 ├── app/
+│   ├── get-parameters.php     # Database credentials (edit catch block)
 │   ├── index.php              # Home page
 │   ├── query.php              # Query selection page
 │   ├── query2.php             # Query processor
 │   ├── query3.php             # Additional queries
-│   ├── get-parameters.php     # AWS parameter retrieval (for production)
 │   ├── mobile.php             # Mobile phones query
 │   ├── population.php         # Population query
 │   ├── lifeexpectancy.php     # Life expectancy query
@@ -465,7 +446,8 @@ DevSecOps-Research-Project/
 │   ├── style.css              # Stylesheets
 │   └── README.md              # AWS SDK documentation
 ├── database/
-│   └── setup_database.sql     # Database setup script
+│   ├── setup_database.sql     # Database setup script
+│   └── README.md              # Database documentation
 ├── infrastructure/
 │   ├── ansible/
 │   │   └── inventory.yml      # Ansible inventory
@@ -473,7 +455,9 @@ DevSecOps-Research-Project/
 │       └── main.tf            # Terraform configuration
 ├── .github/
 │   └── pipeline.yml           # CI/CD pipeline
-└── SETUP_GUIDE.md             # This setup guide
+├── .gitignore                 # Git ignore file
+├── SETUP_GUIDE.md             # Complete setup guide (this file)
+└── QUICKSTART.md              # Quick start guide
 ```
 
 ---
@@ -482,10 +466,37 @@ DevSecOps-Research-Project/
 
 The application provides queries for:
 1. **Mobile Phones** - Number of mobile phone providers per country
-2. **Population** - Population statistics
-3. **Life Expectancy** - Average life expectancy data
+2. **Population** - Population and urban population statistics
+3. **Life Expectancy** - Birth rate and average life expectancy data
 4. **GDP** - Gross Domestic Product figures
-5. **Mortality** - Mortality rates
+5. **Mortality** - Childhood mortality rates
+
+## 🔧 How Configuration Works
+
+The application uses `get-parameters.php` for database credentials:
+
+1. **Production (AWS):** Fetches credentials from AWS Secrets Manager and RDS
+2. **Local Development:** Uses hardcoded values in the `catch` block when AWS is not available
+
+The `get-parameters.php` file:
+- Lines 1-73: AWS connection code (tries to connect to AWS Secrets Manager)
+- Lines 75-80: Fallback credentials in `catch` block (for local development)
+
+When you run locally, the AWS connection fails (which is expected), and the code automatically falls back to your local credentials.
+
+**Database credential variables used throughout the app:**
+- `$ep` - Database host (endpoint)
+- `$db` - Database name
+- `$un` - Database username (user)
+- `$pw` - Database password
+
+**Files that use these credentials:**
+- `query2.php` - Includes `get-parameters.php` and routes to queries
+- `mobile.php` - Connects using `$ep`, `$un`, `$pw`, `$db`
+- `population.php` - Connects using `$ep`, `$un`, `$pw`, `$db`
+- `lifeexpectancy.php` - Connects using session or direct variables
+- `gdp.php` - Connects using `$ep`, `$un`, `$pw`, `$db`
+- `mortality.php` - Connects using `$ep`, `$un`, `$pw`, `$db`
 
 ---
 

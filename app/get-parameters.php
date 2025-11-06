@@ -83,10 +83,11 @@
 
         }
         catch (Exception $e) {
-          $ep = 'localhost';        // Your database host
-          $db = 'countries';        // Your database name
-          $un = 'webapp_user';      // Your database username
-          $pw = 'your_password';    // CHANGE THIS to your actual database password!
+          // Use Docker environment variables if available, otherwise use localhost
+          $ep = getenv('DB_HOST') ?: 'localhost';
+          $db = getenv('DB_NAME') ?: 'countries';
+          $un = getenv('DB_USER') ?: 'webapp_user';
+          $pw = getenv('DB_PASSWORD') ?: 'your_password';
         }
       error_log('Settings are: ' . $ep. " / " . $db . " / " . $un . " / " . $pw);
       #echo " Check your Database settings ";

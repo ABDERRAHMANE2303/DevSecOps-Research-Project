@@ -1,0 +1,392 @@
+name: Security Scan
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 1"
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+env:
+  TZ: "Europe/Paris"
+
+jobs:
+  security-scan:
+    name: Security Scan Pipeline
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      # -------------------------------
+      # PHASE 1: PREPARATION
+      # -------------------------------
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set Scan Metadata
+        id: metadata
+        run: |
+          echo "scan_date=$(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
+          echo "scan_time=$(date +%H:%M:%S)" >> $GITHUB_OUTPUT
+          echo "commit_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          echo "branch=${GITHUB_REF#refs/heads/}" >> $GITHUB_OUTPUT
+          echo "Scan Metadata:"
+          echo "  Date: $(date +%Y-%m-%d)"
+          echo "  Branch: ${GITHUB_REF#refs/heads/}"
+          echo "  Commit: $(git rev-parse --short HEAD)"
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install Semgrep
+        run: |
+          pip install semgrep
+          semgrep --version
+
+      # -------------------------------
+      # PHASE 2: STATIC ANALYSIS (SAST)
+      # -------------------------------
+      - name: Run Semgrep (SAST)
+        run: |
+          echo "Running Semgrep scan..."
+          semgrep --config=p/php --sarif --output=semgrep.sarif . || true
+          semgrep --config=p/php --json --output=semgrep.json . || true
+          echo "Semgrep reports generated"
+        continue-on-error: true
+
+      - name: Upload Semgrep to GitHub Security Dashboard
+        if: always() && hashFiles('semgrep.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep-sast
+        continue-on-error: true
+
+      # -------------------------------
+      # PHASE 3: INFRASTRUCTURE SECURITY (IaC)
+      # -------------------------------
+      - name: Run Trivy IaC Scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: config
+          scan-ref: ./infrastructure
+          format: "sarif"
+          output: "trivy-iac.sarif"
+          exit-code: "0"
+          severity: "HIGH,CRITICAL"
+        continue-on-error: true
+
+      - name: Upload Trivy IaC to GitHub Security Dashboard
+        if: always() && hashFiles('trivy-iac.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-iac.sarif
+          category: trivy-iac
+        continue-on-error: true
+
+      # -------------------------------
+      # PHASE 4: CONTAINER BUILD
+      # -------------------------------
+      - name: Build Docker image
+        run: |
+          echo "Building Docker image..."
+          docker build -t research-app:${{ steps.metadata.outputs.commit_sha }} .
+          docker tag research-app:${{ steps.metadata.outputs.commit_sha }} research-app:latest
+          echo "Image built successfully"
+
+      # -------------------------------
+      # PHASE 5: CONTAINER SECURITY (SCA)
+      # -------------------------------
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: research-app:latest
+          format: "json"
+          output: "trivy-results.json"
+          ignore-unfixed: true
+          vuln-type: "os,library"
+          scanners: "vuln,secret,config"
+          severity: "UNKNOWN,LOW,MEDIUM,HIGH,CRITICAL"
+          exit-code: "0"
+        continue-on-error: true
+
+      - name: Convert Trivy JSON to SARIF
+        if: always() && hashFiles('trivy-results.json') != ''
+        run: |
+          echo "Converting Trivy JSON to SARIF format..."
+          docker run --rm -v $(pwd):/data aquasec/trivy convert \
+            --format sarif \
+            --output /data/trivy-results.sarif \
+            /data/trivy-results.json
+          echo "Conversion complete"
+        continue-on-error: true
+
+      - name: Upload Trivy scan results to GitHub Security Dashboard
+        if: always() && hashFiles('trivy-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results.sarif
+          category: trivy-image
+        continue-on-error: true
+
+      - name: Evaluate vulnerability severity
+        id: eval
+        if: always()
+        run: |
+          if [ -f "trivy-results.json" ]; then
+            critical=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json 2>/dev/null || echo 0)
+            high=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results.json 2>/dev/null || echo 0)
+            echo "Detected $critical critical vulnerabilities."
+            echo "Detected $high high vulnerabilities."
+            echo "critical=$critical" >> $GITHUB_OUTPUT
+            echo "high=$high" >> $GITHUB_OUTPUT
+          else
+            echo "No Trivy results found"
+            echo "critical=0" >> $GITHUB_OUTPUT
+            echo "high=0" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Fail pipeline on critical vulnerabilities
+        if: steps.eval.outputs.critical != '0'
+        run: |
+          echo "CRITICAL VULNERABILITIES FOUND: Security scan failed."
+          echo "Found ${{ steps.eval.outputs.critical }} critical vulnerabilities"
+          echo "Review findings in GitHub Security tab"
+          echo "Check trivy-results.json for details."
+          exit 1
+
+      # -------------------------------
+      # PHASE 6: DYNAMIC TESTING (DAST)
+      # -------------------------------
+      - name: Start application container for DAST
+        if: success() || failure()
+        run: |
+          echo "Starting PHP application for DAST..."
+          docker run -d --name test-app \
+            -p 8080:80 \
+            --health-cmd="curl -fs http://localhost:80 || exit 1" \
+            --health-interval=5s \
+            --health-timeout=3s \
+            --health-retries=10 \
+            research-app:latest
+
+          echo "Waiting for the app to become healthy..."
+          timeout 60 bash -c 'until docker inspect --format="{{.State.Health.Status}}" test-app | grep -q "healthy"; do sleep 3; done'
+          echo "Application is ready for DAST scanning."
+
+      - name: Fix workspace permissions for ZAP
+        run: sudo chmod -R 777 ${{ github.workspace }}
+
+      - name: Run OWASP ZAP Full Scan
+        if: always()
+        run: |
+          echo "Running ZAP full scan..."
+          docker run --rm -v $(pwd):/zap/wrk/:rw --network=host \
+            ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
+            -t http://localhost:8080 \
+            -J report_json.json \
+            -w report_md.md \
+            -r report_html.html \
+            -x report_xml.xml \
+            -I \
+            -a -j -l WARN -T 30 \
+            -z "-config spider.maxDuration=5 -config ajaxSpider.maxDuration=3" || true
+
+          echo "ZAP scan completed."
+        continue-on-error: true
+
+      - name: Convert ZAP JSON to SARIF format
+        if: always()
+        run: |
+          python3 << 'PYTHON_SCRIPT'
+          import json, os
+
+          if not os.path.exists("report_json.json"):
+              print("No ZAP report found, creating empty SARIF")
+              empty = {
+                  "version": "2.1.0",
+                  "runs": [{
+                      "tool": {"driver": {"name": "OWASP ZAP"}},
+                      "results": []
+                  }]
+              }
+              json.dump(empty, open("zap-results.sarif", "w"), indent=2)
+              exit(0)
+
+          zap = json.load(open("report_json.json"))
+          risk_map = {"High": "error", "Medium": "warning", "Low": "note", "Informational": "note"}
+          rules, results = {}, []
+
+          os.makedirs("zap_scan", exist_ok=True)
+
+          for site in zap.get("site", []):
+              for alert in site.get("alerts", []):
+                  pid = str(alert.get("pluginid"))
+                  name = alert.get("name", "Unknown")
+                  risk = alert.get("riskdesc", "Low").split()[0]
+
+                  if pid not in rules:
+                      rules[pid] = {
+                          "id": pid,
+                          "name": name,
+                          "shortDescription": {"text": name}
+                      }
+
+                  for inst in alert.get("instances", []):
+                      uri = inst.get("uri", "unknown")
+                      file_path = "zap_scan/" + os.path.basename(uri)
+
+                      results.append({
+                          "ruleId": pid,
+                          "level": risk_map.get(risk, "note"),
+                          "message": {"text": name},
+                          "locations": [{
+                              "physicalLocation": {
+                                  "artifactLocation": {
+                                      "uri": file_path,
+                                      "uriBaseId": "PROJECTROOT"
+                                  }
+                              }
+                          }]
+                      })
+
+          sarif = {
+              "version": "2.1.0",
+              "runs": [{
+                  "tool": {"driver": {
+                      "name": "OWASP ZAP",
+                      "rules": list(rules.values())
+                  }},
+                  "results": results
+              }]
+          }
+
+          json.dump(sarif, open("zap-results.sarif", "w"), indent=2)
+          print(f"SARIF created with {len(results)} findings.")
+          PYTHON_SCRIPT
+        continue-on-error: true
+
+      - name: Upload ZAP SARIF results
+        if: always() && hashFiles('zap-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: zap-results.sarif
+          category: owasp-zap-dast
+        continue-on-error: true
+
+      - name: Evaluate DAST severity
+        if: always()
+        id: eval-dast
+        run: |
+          if [ -f "report_json.json" ]; then
+            high=$(jq '[.site[].alerts[]? | select(.riskdesc | startswith("High"))] | length' report_json.json 2>/dev/null || echo 0)
+            echo "High-risk vulnerabilities: $high"
+            echo "high=$high" >> $GITHUB_OUTPUT
+          else
+            echo "No DAST report found."
+            echo "high=0" >> $GITHUB_OUTPUT
+          fi
+
+      # -------------------------------
+      # PHASE 7: REPORTING
+      # -------------------------------
+      - name: Upload ZAP reports as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap_dast_reports
+          path: |
+            report_html.html
+            report_json.json
+            report_md.md
+            report_xml.xml
+            zap-results.sarif
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Upload All Security Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-reports-${{ steps.metadata.outputs.commit_sha }}
+          path: |
+            semgrep.json
+            semgrep.sarif
+            trivy-iac.sarif
+            trivy-results.json
+            trivy-results.sarif
+            report_html.html
+            report_json.json
+            report_md.md
+            report_xml.xml
+            zap-results.sarif
+          retention-days: 90
+          if-no-files-found: ignore
+
+      # -------------------------------
+      # PHASE 8: CLEANUP
+      # -------------------------------
+      - name: Cleanup test container
+        if: always()
+        run: |
+          docker rm -f test-app || true
+          docker system prune -f || true
+          echo "Cleaned up test container."
+
+      - name: Fail pipeline on high-risk DAST vulnerabilities
+        if: steps.eval-dast.outputs.high != '0'
+        run: |
+          echo "HIGH-RISK DAST VULNERABILITIES DETECTED!"
+          echo "Found ${{ steps.eval-dast.outputs.high }} high-risk issues."
+          echo "Check artifacts and GitHub Security Dashboard."
+          exit 1
+
+      # -------------------------------
+      # PHASE 9: Summary Report
+      # -------------------------------
+      - name: Generate Summary Report
+        if: always()
+        run: |
+          cat > $GITHUB_STEP_SUMMARY << 'EOF'
+          # Security Scan Summary
+
+          **Branch:** `${{ steps.metadata.outputs.branch }}`  
+          **Commit:** `${{ steps.metadata.outputs.commit_sha }}`  
+          **Date:** ${{ steps.metadata.outputs.scan_date }} ${{ steps.metadata.outputs.scan_time }}
+
+          ## Scan Results
+
+          | Scan Type | Status | Critical | High | Notes |
+          |-----------|--------|----------|------|-------|
+          | Semgrep (SAST) | ✅ Complete | - | - | Static code analysis |
+          | Trivy IaC | ✅ Complete | - | - | Infrastructure security |
+          | Trivy Image (SCA) | ✅ Complete | ${{ steps.eval.outputs.critical }} | ${{ steps.eval.outputs.high }} | Container vulnerabilities |
+          | OWASP ZAP (DAST) | ✅ Complete | - | ${{ steps.eval-dast.outputs.high }} | Dynamic application scan |
+
+          ## Quick Links
+
+          - [GitHub Security Tab](https://github.com/${{ github.repository }}/security/code-scanning)
+          - [Workflow Run](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          - [Download Reports](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}#artifacts)
+
+          ## Findings Summary
+
+          - **Critical Vulnerabilities:** ${{ steps.eval.outputs.critical }}
+          - **High Vulnerabilities (SAST/SCA):** ${{ steps.eval.outputs.high }}
+          - **High Vulnerabilities (DAST):** ${{ steps.eval-dast.outputs.high }}
+
+          ---
+
+          📊 Review detailed findings in the GitHub Security tab or download artifacts for offline analysis.
+          EOF

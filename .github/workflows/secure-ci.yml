@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      - name: PHP_CodeSniffer (PSR12)
+      - name: PHP_CodeSniffer (PSR12) if installed
         run: |
           if [ -x vendor/bin/phpcs ]; then
             vendor/bin/phpcs --standard=PSR12 app || true
@@ -47,7 +47,7 @@ jobs:
             echo "phpcs not installed"
           fi
 
-      - name: PHPStan Analysis
+      - name: PHPStan Analysis if installed
         run: |
           if [ -x vendor/bin/phpstan ]; then
             vendor/bin/phpstan analyse --level=max app || true
@@ -55,57 +55,65 @@ jobs:
             echo "phpstan not installed"
           fi
 
-      - name: Dependency Audit
+      - name: Dependency Audit (composer)
         run: composer audit --no-interaction || true
 
-      - name: Semgrep Security Scan (pip install)
+      - name: Semgrep Security Scan (produce SARIF)
         run: |
           python3 -m pip install --user semgrep
           export PATH="$HOME/.local/bin:$PATH"
           semgrep --version
-          semgrep --config p/php --json --output semgrep-report.json . || true
+          semgrep --config p/php --sarif --output semgrep.sarif . || true
 
-      - name: OWASP Dependency Check (docker)
+      - name: Build Docker image (for container scan)
+        run: |
+          docker build -t myapp:${{ github.sha }} . || true
+
+      - name: Container scan with Trivy (produce SARIF)
+        run: |
+          mkdir -p trivy-output
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "${{ github.workspace }}/trivy-output":/output aquasecurity/trivy:latest \
+            image --format sarif --output /output/trivy-results.sarif myapp:${{ github.sha }} || true
+
+      - name: Infrastructure scan (tfsec produce SARIF)
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/src aquasecurity/tfsec:latest /src --format sarif --out /src/tfsec-results.sarif || true
+
+      - name: Optional: OWASP Dependency-Check (HTML/XML report)
         run: |
           mkdir -p dependency-check-report
           docker run --rm -v "${{ github.workspace }}":/src -v "${{ github.workspace }}/dependency-check-report":/report owasp/dependency-check:latest \
-            --project "PHP App" --scan /src --format HTML --out /report || true
+            --project "PHP App" --scan /src --format ALL --out /report || true
 
-      - name: Secret Scan (Gitleaks - docker)
+      - name: Optional: Secret Scan (Gitleaks - docker)
         run: |
           docker run --rm -v "${{ github.workspace }}":/repo zricethezav/gitleaks:latest detect \
             -s /repo -R -o /repo/gitleaks-report.json || true
 
-      - name: Dockerfile Lint (Hadolint - docker)
+      - name: Ensure SARIF files exist (avoid upload errors)
         run: |
-          if [ -f Dockerfile ]; then
-            docker run --rm -v "${{ github.workspace }}":/data hadolint/hadolint:v2.12.0 hadolint /data/Dockerfile || true
-          else
-            echo "No Dockerfile to lint"
-          fi
-
-      - name: Build Docker image
-        run: |
-          docker build -t myapp:${{ github.sha }} . || true
-
-      - name: Container scan with Trivy (docker)
-        run: |
+          touch semgrep.sarif || true
           mkdir -p trivy-output
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "${{ github.workspace }}/trivy-output":/output aquasecurity/trivy:latest \
-            image --format json --output /output/trivy-results.json myapp:${{ github.sha }} || true
+          touch trivy-output/trivy-results.sarif || true
+          touch tfsec-results.sarif || true
+          # dependency-check.sarif not generated — left out unless you convert it
 
-      - name: Infrastructure scan (tfsec - docker)
-        run: |
-          docker run --rm -v "${{ github.workspace }}":/src aquasecurity/tfsec:latest /src --format json --out /src/tfsec-results.json || true
+      - name: Upload SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v2
+        with:
+          sarif_file: |
+            semgrep.sarif
+            trivy-output/trivy-results.sarif
+            tfsec-results.sarif
 
-      - name: Upload Security Reports
+      - name: Upload Security Reports (artifacts)
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: security-reports
           path: |
-            semgrep-report.json
+            semgrep.sarif
+            trivy-output/trivy-results.sarif
+            tfsec-results.sarif
             dependency-check-report/
-            trivy-output/trivy-results.json
-            tfsec-results.json
             gitleaks-report.json

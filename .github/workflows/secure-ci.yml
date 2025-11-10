@@ -22,11 +22,11 @@ jobs:
     steps:
       # 🧩 Checkout source
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
 
       # 🧩 PHP setup
       - name: Setup PHP
-        uses: shivammathur/setup-php@v2
+        uses: shivammathur/setup-php@c541c155eee45413f5b09a52248675b1a2575231 # v2.31.1
         with:
           php-version: '8.2'
 
@@ -46,7 +46,7 @@ jobs:
 
       # ✅ Static Application Security Testing (SAST)
       - name: Semgrep Security Scan
-        uses: returntocorp/semgrep-action@v1.31.0
+        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1.95.0
         with:
           config: "p/php" # built-in PHP security rules
           output: semgrep-report.json
@@ -55,7 +55,7 @@ jobs:
 
       # ✅ Dependency Vulnerability Scanning
       - name: OWASP Dependency Check
-        uses: dependency-check/Dependency-Check_Action@main
+        uses: dependency-check/Dependency-Check_Action@8e1519gaddf4d5ae0e229a04fb7a620c23e26de0 # v1.1.0
         with:
           project: "PHP App"
           scan: "."
@@ -65,7 +65,7 @@ jobs:
 
       # ✅ Secrets Scanning
       - name: Secret Scan (Gitleaks)
-        uses: gitleaks/gitleaks-action@v2.3.6
+        uses: gitleaks/gitleaks-action@cb7149a9b57195b609dc6c81f1de26901952797a # v2.3.6
         with:
           config-path: .github/gitleaks.toml
           fail: true
@@ -75,22 +75,22 @@ jobs:
 
       # ✅ Docker Security
       - name: Dockerfile Lint
-        uses: hadolint/hadolint-action@v3.1.0
+        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
         with:
           dockerfile: Dockerfile
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3.6.1
 
       - name: Build Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85 # v6.7.0
         with:
           context: .
           push: false
           tags: myapp:${{ github.sha }}
 
       - name: Container scan with Trivy
-        uses: aquasecurity/trivy-action@0.20.0
+        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
         with:
           image-ref: myapp:${{ github.sha }}
           format: json
@@ -102,14 +102,14 @@ jobs:
 
       # ✅ Infrastructure as Code Security
       - name: Infrastructure scan (tfsec)
-        uses: aquasecurity/tfsec-action@v1.0.3
+        uses: aquasecurity/tfsec-action@b466648d6e39e7c75324f25d83891162a721f2d6 # v1.0.3
         with:
           args: --format json --out tfsec-results.json
         continue-on-error: true
 
       # 📊 Governance & Reporting
       - name: Upload Security Reports
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
         with:
           name: security-reports
           path: |

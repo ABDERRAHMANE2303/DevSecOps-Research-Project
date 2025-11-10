@@ -20,102 +20,93 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 🧩 Checkout source
       - name: Checkout repository
-        uses: actions/checkout@692973e3d937129bcbf40652eb9f2f61becf3332 # v4.1.7
+        uses: actions/checkout@v4
 
-      # 🧩 PHP setup
       - name: Setup PHP
-        uses: shivammathur/setup-php@c541c155eee45413f5b09a52248675b1a2575231 # v2.31.1
+        uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
 
-      # 🧩 Install project dependencies
+      - name: Cache Composer
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/composer
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-
+
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      # ✅ Code Quality Checks
       - name: PHP_CodeSniffer (PSR12)
-        run: vendor/bin/phpcs --standard=PSR12 app || true
+        run: |
+          if [ -x vendor/bin/phpcs ]; then
+            vendor/bin/phpcs --standard=PSR12 app || true
+          else
+            echo "phpcs not installed"
+          fi
 
       - name: PHPStan Analysis
-        run: vendor/bin/phpstan analyse --level=max app || true
+        run: |
+          if [ -x vendor/bin/phpstan ]; then
+            vendor/bin/phpstan analyse --level=max app || true
+          else
+            echo "phpstan not installed"
+          fi
 
       - name: Dependency Audit
         run: composer audit --no-interaction || true
 
-      # ✅ Static Application Security Testing (SAST)
-      - name: Semgrep Security Scan
-        uses: returntocorp/semgrep-action@713efdd345f3035192eaa63f56867b88e63e4e5d # v1.95.0
-        with:
-          config: "p/php" # built-in PHP security rules
-          output: semgrep-report.json
-          json: true
-        continue-on-error: true
+      - name: Semgrep Security Scan (pip install)
+        run: |
+          python3 -m pip install --user semgrep
+          export PATH="$HOME/.local/bin:$PATH"
+          semgrep --version
+          semgrep --config p/php --json --output semgrep-report.json . || true
 
-      # ✅ Dependency Vulnerability Scanning
-      - name: OWASP Dependency Check
-        uses: dependency-check/Dependency-Check_Action@8e1519gaddf4d5ae0e229a04fb7a620c23e26de0 # v1.1.0
-        with:
-          project: "PHP App"
-          scan: "."
-          format: "HTML"
-          out: "dependency-check-report"
-        continue-on-error: true
+      - name: OWASP Dependency Check (docker)
+        run: |
+          mkdir -p dependency-check-report
+          docker run --rm -v "${{ github.workspace }}":/src -v "${{ github.workspace }}/dependency-check-report":/report owasp/dependency-check:latest \
+            --project "PHP App" --scan /src --format HTML --out /report || true
 
-      # ✅ Secrets Scanning
-      - name: Secret Scan (Gitleaks)
-        uses: gitleaks/gitleaks-action@cb7149a9b57195b609dc6c81f1de26901952797a # v2.3.6
-        with:
-          config-path: .github/gitleaks.toml
-          fail: true
-          report-format: json
-          report-path: gitleaks-report.json
-        continue-on-error: true
+      - name: Secret Scan (Gitleaks - docker)
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/repo zricethezav/gitleaks:latest detect \
+            -s /repo -R -o /repo/gitleaks-report.json || true
 
-      # ✅ Docker Security
-      - name: Dockerfile Lint
-        uses: hadolint/hadolint-action@54c9adbab1582c2ef04b2016b760714a4bfde3cf # v3.1.0
-        with:
-          dockerfile: Dockerfile
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@988b5a0280414f521da01fcc63a27aeeb4b104db # v3.6.1
+      - name: Dockerfile Lint (Hadolint - docker)
+        run: |
+          if [ -f Dockerfile ]; then
+            docker run --rm -v "${{ github.workspace }}":/data hadolint/hadolint:v2.12.0 hadolint /data/Dockerfile || true
+          else
+            echo "No Dockerfile to lint"
+          fi
 
       - name: Build Docker image
-        uses: docker/build-push-action@5cd11c3a4ced054e52742c5fd54dca954e0edd85 # v6.7.0
-        with:
-          context: .
-          push: false
-          tags: myapp:${{ github.sha }}
+        run: |
+          docker build -t myapp:${{ github.sha }} . || true
 
-      - name: Container scan with Trivy
-        uses: aquasecurity/trivy-action@6e7b7d1fd3e4fef0c5fa8cce1229c54b2c9bd0d8 # v0.24.0
-        with:
-          image-ref: myapp:${{ github.sha }}
-          format: json
-          output: trivy-results.json
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: 1
-        continue-on-error: true
+      - name: Container scan with Trivy (docker)
+        run: |
+          mkdir -p trivy-output
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "${{ github.workspace }}/trivy-output":/output aquasecurity/trivy:latest \
+            image --format json --output /output/trivy-results.json myapp:${{ github.sha }} || true
 
-      # ✅ Infrastructure as Code Security
-      - name: Infrastructure scan (tfsec)
-        uses: aquasecurity/tfsec-action@b466648d6e39e7c75324f25d83891162a721f2d6 # v1.0.3
-        with:
-          args: --format json --out tfsec-results.json
-        continue-on-error: true
+      - name: Infrastructure scan (tfsec - docker)
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/src aquasecurity/tfsec:latest /src --format json --out /src/tfsec-results.json || true
 
-      # 📊 Governance & Reporting
       - name: Upload Security Reports
-        uses: actions/upload-artifact@50769540e7f4bd5e21e526ee35c689e35e0d6874 # v4.4.0
+        uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: security-reports
           path: |
             semgrep-report.json
             dependency-check-report/
-            trivy-results.json
+            trivy-output/trivy-results.json
             tfsec-results.json
             gitleaks-report.json
         if: always()

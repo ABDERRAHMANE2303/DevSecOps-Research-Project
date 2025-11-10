@@ -1,0 +1,38 @@
+title = "Gitleaks Configuration"
+
+[allowlist]
+# Paths or files to ignore (e.g., test data, vendor)
+paths = [
+  "vendor/",
+  "tests/",
+  "node_modules/",
+  "storage/",
+  "public/"
+]
+
+# Known patterns that look like secrets but aren't
+regexes = [
+  "example_api_key_[0-9A-Za-z]+",
+  "dummy_token_[0-9A-Za-z]+"
+]
+
+# Commit authors to ignore (e.g., bots)
+commits = [
+  "dependabot",
+  "github-actions"
+]
+
+[[rules]]
+description = "Generic API Key"
+regex = '''(?i)(api[_-]?key|token|secret|password)[=:]\s*['"]?[A-Za-z0-9\-_]{20,}['"]?'''
+tags = ["key", "api", "generic"]
+
+[[rules]]
+description = "AWS Access Key"
+regex = '''AKIA[0-9A-Z]{16}'''
+tags = ["aws", "key"]
+
+[[rules]]
+description = "Private RSA Key"
+regex = '''-----BEGIN RSA PRIVATE KEY-----'''
+tags = ["rsa", "private", "key"]

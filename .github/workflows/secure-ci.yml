@@ -102,21 +102,21 @@ jobs:
           else
             echo "⚠ Trivy SARIF not created, creating empty SARIF"
             cat > trivy-results.sarif <<'EOSARIF'
-{
-  "version": "2.1.0",
-  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-  "runs": [{
-    "tool": {
-      "driver": {
-        "name": "Trivy",
-        "version": "latest"
-      }
-    },
-    "results": []
-  }]
-}
-EOSARIF
-          fi
+            {
+              "version": "2.1.0",
+              "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+              "runs": [{
+                "tool": {
+                  "driver": {
+                    "name": "Trivy",
+                    "version": "latest"
+                  }
+                },
+                "results": []
+              }]
+            }
+            EOSARIF
+                      fi
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
@@ -143,21 +143,21 @@ EOSARIF
           else
             echo "⚠ tfsec SARIF not created, creating empty SARIF"
             cat > tfsec-output/tfsec-results.sarif <<'EOSARIF'
-{
-  "version": "2.1.0",
-  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-  "runs": [{
-    "tool": {
-      "driver": {
-        "name": "tfsec",
-        "version": "latest"
-      }
-    },
-    "results": []
-  }]
-}
-EOSARIF
-          fi
+            {
+              "version": "2.1.0",
+              "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+              "runs": [{
+                "tool": {
+                  "driver": {
+                    "name": "tfsec",
+                    "version": "latest"
+                  }
+                },
+                "results": []
+              }]
+            }
+            EOSARIF
+                      fi
 
       - name: Check tfsec SARIF exists
         id: tfsec-check

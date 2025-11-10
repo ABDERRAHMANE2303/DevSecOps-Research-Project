@@ -46,7 +46,7 @@ jobs:
 
       # ✅ Static Application Security Testing (SAST)
       - name: Semgrep Security Scan
-        uses: returntocorp/semgrep-action@v2
+        uses: returntocorp/semgrep-action@v1.31.0
         with:
           config: "p/php" # built-in PHP security rules
           output: semgrep-report.json
@@ -55,7 +55,7 @@ jobs:
 
       # ✅ Dependency Vulnerability Scanning
       - name: OWASP Dependency Check
-        uses: dependency-check/Dependency-Check_Action@v7
+        uses: dependency-check/Dependency-Check_Action@main
         with:
           project: "PHP App"
           scan: "."
@@ -65,7 +65,7 @@ jobs:
 
       # ✅ Secrets Scanning
       - name: Secret Scan (Gitleaks)
-        uses: gitleaks/gitleaks-action@v3
+        uses: gitleaks/gitleaks-action@v2.3.6
         with:
           config-path: .github/gitleaks.toml
           fail: true

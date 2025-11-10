@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
   actions: read
-  security-events: write
+  security-events: write  # Required for SARIF upload
 
 concurrency:
   group: ${{ github.ref }}
@@ -39,7 +39,7 @@ jobs:
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      - name: PHP_CodeSniffer (PSR12) if installed
+      - name: PHP_CodeSniffer (PSR12)
         run: |
           if [ -x vendor/bin/phpcs ]; then
             vendor/bin/phpcs --standard=PSR12 app || true
@@ -47,7 +47,7 @@ jobs:
             echo "phpcs not installed"
           fi
 
-      - name: PHPStan Analysis if installed
+      - name: PHPStan Analysis
         run: |
           if [ -x vendor/bin/phpstan ]; then
             vendor/bin/phpstan analyse --level=max app || true
@@ -55,65 +55,165 @@ jobs:
             echo "phpstan not installed"
           fi
 
-      - name: Dependency Audit (composer)
+      - name: Dependency Audit
         run: composer audit --no-interaction || true
 
-      - name: Semgrep Security Scan (produce SARIF)
+      # ===== SEMGREP WITH SARIF OUTPUT =====
+      - name: Semgrep Security Scan
         run: |
           python3 -m pip install --user semgrep
           export PATH="$HOME/.local/bin:$PATH"
           semgrep --version
-          semgrep --config p/php --sarif --output semgrep.sarif . || true
+          semgrep --config p/php --sarif --output semgrep-results.sarif . || true
 
-      - name: Build Docker image (for container scan)
+      - name: Upload Semgrep results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
+
+      # ===== TRIVY WITH SARIF OUTPUT =====
+      - name: Build Docker image
         run: |
-          docker build -t myapp:${{ github.sha }} . || true
+          if [ -f Dockerfile ]; then
+            docker build -t myapp:${{ github.sha }} . || echo "Docker build failed"
+          else
+            echo "No Dockerfile found"
+          fi
 
-      - name: Container scan with Trivy (produce SARIF)
+      - name: Container scan with Trivy
         run: |
           mkdir -p trivy-output
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "${{ github.workspace }}/trivy-output":/output aquasecurity/trivy:latest \
-            image --format sarif --output /output/trivy-results.sarif myapp:${{ github.sha }} || true
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            -v "${{ github.workspace }}/trivy-output":/output \
+            aquasecurity/trivy:latest image \
+            --format sarif --output /output/trivy-results.sarif \
+            --severity CRITICAL,HIGH \
+            myapp:${{ github.sha }} || true
 
-      - name: Infrastructure scan (tfsec produce SARIF)
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-output/trivy-results.sarif
+          category: trivy-container
+
+      # ===== TFSEC WITH SARIF OUTPUT =====
+      - name: Infrastructure scan (tfsec)
         run: |
-          docker run --rm -v "${{ github.workspace }}":/src aquasecurity/tfsec:latest /src --format sarif --out /src/tfsec-results.sarif || true
+          docker run --rm -v "${{ github.workspace }}":/src \
+            aquasecurity/tfsec:latest /src \
+            --format sarif --out /src/tfsec-results.sarif || true
 
-      - name: Optional: OWASP Dependency-Check (HTML/XML report)
+      - name: Upload tfsec results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: tfsec-results.sarif
+          category: tfsec
+
+      # ===== GITLEAKS WITH SARIF CONVERSION =====
+      - name: Secret Scan (Gitleaks)
+        run: |
+          docker run --rm -v "${{ github.workspace }}":/repo \
+            zricethezav/gitleaks:latest detect \
+            -s /repo --report-format json --report-path /repo/gitleaks-report.json || true
+
+      - name: Convert Gitleaks to SARIF
+        if: always()
+        run: |
+          python3 - <<'EOF'
+          import json
+          import os
+
+          def convert_gitleaks_to_sarif(gitleaks_file, sarif_file):
+              if not os.path.exists(gitleaks_file):
+                  print(f"{gitleaks_file} not found")
+                  return
+              
+              with open(gitleaks_file, 'r') as f:
+                  gitleaks_data = json.load(f)
+              
+              results = []
+              for finding in gitleaks_data:
+                  results.append({
+                      "ruleId": finding.get("RuleID", "secret-detected"),
+                      "level": "error",
+                      "message": {
+                          "text": f"Secret detected: {finding.get('Description', 'Unknown')}"
+                      },
+                      "locations": [{
+                          "physicalLocation": {
+                              "artifactLocation": {
+                                  "uri": finding.get("File", "unknown")
+                              },
+                              "region": {
+                                  "startLine": finding.get("StartLine", 1),
+                                  "startColumn": finding.get("StartColumn", 1)
+                              }
+                          }
+                      }]
+                  })
+              
+              sarif = {
+                  "version": "2.1.0",
+                  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+                  "runs": [{
+                      "tool": {
+                          "driver": {
+                              "name": "Gitleaks",
+                              "informationUri": "https://github.com/gitleaks/gitleaks"
+                          }
+                      },
+                      "results": results
+                  }]
+              }
+              
+              with open(sarif_file, 'w') as f:
+                  json.dump(sarif, f, indent=2)
+              
+              print(f"Converted {len(results)} findings to SARIF")
+
+          convert_gitleaks_to_sarif('gitleaks-report.json', 'gitleaks-results.sarif')
+          EOF
+
+      - name: Upload Gitleaks results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gitleaks-results.sarif
+          category: gitleaks
+
+      # ===== DEPENDENCY CHECK (Keep as HTML for artifact) =====
+      - name: OWASP Dependency Check
         run: |
           mkdir -p dependency-check-report
-          docker run --rm -v "${{ github.workspace }}":/src -v "${{ github.workspace }}/dependency-check-report":/report owasp/dependency-check:latest \
-            --project "PHP App" --scan /src --format ALL --out /report || true
+          docker run --rm -v "${{ github.workspace }}":/src \
+            -v "${{ github.workspace }}/dependency-check-report":/report \
+            owasp/dependency-check:latest \
+            --project "PHP App" --scan /src --format HTML --out /report || true
 
-      - name: Optional: Secret Scan (Gitleaks - docker)
+      # ===== HADOLINT (Dockerfile Linting) =====
+      - name: Dockerfile Lint (Hadolint)
         run: |
-          docker run --rm -v "${{ github.workspace }}":/repo zricethezav/gitleaks:latest detect \
-            -s /repo -R -o /repo/gitleaks-report.json || true
+          if [ -f Dockerfile ]; then
+            docker run --rm -v "${{ github.workspace }}":/data \
+              hadolint/hadolint:v2.12.0 hadolint /data/Dockerfile || true
+          else
+            echo "No Dockerfile to lint"
+          fi
 
-      - name: Ensure SARIF files exist (avoid upload errors)
-        run: |
-          touch semgrep.sarif || true
-          mkdir -p trivy-output
-          touch trivy-output/trivy-results.sarif || true
-          touch tfsec-results.sarif || true
-          # dependency-check.sarif not generated — left out unless you convert it
-
-      - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v2
-        with:
-          sarif_file: |
-            semgrep.sarif
-            trivy-output/trivy-results.sarif
-            tfsec-results.sarif
-
-      - name: Upload Security Reports (artifacts)
+      # ===== UPLOAD ALL REPORTS AS ARTIFACTS =====
+      - name: Upload Security Reports
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: security-reports
           path: |
-            semgrep.sarif
+            semgrep-results.sarif
+            dependency-check-report/
             trivy-output/trivy-results.sarif
             tfsec-results.sarif
-            dependency-check-report/
             gitleaks-report.json
+            gitleaks-results.sarif

@@ -85,12 +85,16 @@ jobs:
       - name: Container scan with Trivy
         run: |
           mkdir -p trivy-output
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+          docker run --rm \
+            -v /var/run/docker.sock:/var/run/docker.sock \
             -v "${{ github.workspace }}/trivy-output":/output \
             aquasecurity/trivy:latest image \
-            --format sarif --output /output/trivy-results.sarif \
+            --scanners vuln \
+            --format sarif \
+            --output /output/trivy-results.sarif \
             --severity CRITICAL,HIGH \
             myapp:${{ github.sha }} || true
+          ls -lh trivy-output || true
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
@@ -102,81 +106,63 @@ jobs:
       # ===== TFSEC WITH SARIF OUTPUT =====
       - name: Infrastructure scan (tfsec)
         run: |
-          docker run --rm -v "${{ github.workspace }}":/src \
+          mkdir -p tfsec-output
+          docker run --rm \
+            -v "${{ github.workspace }}":/src \
+            -v "${{ github.workspace }}/tfsec-output":/out \
             aquasecurity/tfsec:latest /src \
-            --format sarif --out /src/tfsec-results.sarif || true
+            --format sarif --out /out/tfsec-results.sarif || true
+          ls -lh tfsec-output || true
 
       - name: Upload tfsec results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
         if: always()
         with:
-          sarif_file: tfsec-results.sarif
+          sarif_file: tfsec-output/tfsec-results.sarif
           category: tfsec
 
       # ===== GITLEAKS WITH SARIF CONVERSION =====
       - name: Secret Scan (Gitleaks)
         run: |
-          docker run --rm -v "${{ github.workspace }}":/repo \
+          docker run --rm \
+            -v "${{ github.workspace }}":/repo \
             zricethezav/gitleaks:latest detect \
             -s /repo --report-format json --report-path /repo/gitleaks-report.json || true
+          ls -lh ${{ github.workspace }} || true
 
       - name: Convert Gitleaks to SARIF
         if: always()
         run: |
           python3 - <<'EOF'
-          import json
-          import os
-
-          def convert_gitleaks_to_sarif(gitleaks_file, sarif_file):
-              if not os.path.exists(gitleaks_file):
-                  print(f"{gitleaks_file} not found")
-                  return
-              
-              with open(gitleaks_file, 'r') as f:
-                  gitleaks_data = json.load(f)
-              
+          import json, os
+          src = "gitleaks-report.json"
+          dst = "gitleaks-results.sarif"
+          if not os.path.exists(src):
+              print(f"{src} not found, skipping")
+          else:
+              with open(src) as f: data = json.load(f)
               results = []
-              for finding in gitleaks_data:
+              for finding in data:
                   results.append({
                       "ruleId": finding.get("RuleID", "secret-detected"),
                       "level": "error",
-                      "message": {
-                          "text": f"Secret detected: {finding.get('Description', 'Unknown')}"
-                      },
+                      "message": {"text": finding.get("Description", "Secret detected")},
                       "locations": [{
                           "physicalLocation": {
-                              "artifactLocation": {
-                                  "uri": finding.get("File", "unknown")
-                              },
-                              "region": {
-                                  "startLine": finding.get("StartLine", 1),
-                                  "startColumn": finding.get("StartColumn", 1)
-                              }
+                              "artifactLocation": {"uri": finding.get("File", "unknown")},
+                              "region": {"startLine": finding.get("StartLine", 1)}
                           }
                       }]
                   })
-              
               sarif = {
                   "version": "2.1.0",
                   "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-                  "runs": [{
-                      "tool": {
-                          "driver": {
-                              "name": "Gitleaks",
-                              "informationUri": "https://github.com/gitleaks/gitleaks"
-                          }
-                      },
-                      "results": results
-                  }]
+                  "runs": [{"tool": {"driver": {"name": "Gitleaks"}}, "results": results}]
               }
-              
-              with open(sarif_file, 'w') as f:
-                  json.dump(sarif, f, indent=2)
-              
-              print(f"Converted {len(results)} findings to SARIF")
-
-          convert_gitleaks_to_sarif('gitleaks-report.json', 'gitleaks-results.sarif')
+              with open(dst, "w") as f: json.dump(sarif, f, indent=2)
+              print(f"Wrote {dst} with {len(results)} findings")
           EOF
+          ls -lh || true
 
       - name: Upload Gitleaks results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3

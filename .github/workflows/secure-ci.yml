@@ -109,4 +109,3 @@ jobs:
             trivy-output/trivy-results.json
             tfsec-results.json
             gitleaks-report.json
-        if: always()

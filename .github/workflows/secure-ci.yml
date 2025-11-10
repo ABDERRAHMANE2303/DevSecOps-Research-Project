@@ -73,7 +73,7 @@ jobs:
           sarif_file: semgrep-results.sarif
           category: semgrep
 
-      # ===== TRIVY WITH SARIF OUTPUT (FIXED) =====
+      # ===== TRIVY WITH SARIF OUTPUT =====
       - name: Build Docker image
         run: |
           if [ -f Dockerfile ]; then
@@ -94,7 +94,7 @@ jobs:
             --output /workspace/trivy-results.sarif \
             --severity CRITICAL,HIGH \
             myapp:${{ github.sha }} || true
-          
+
           # Check if file was created
           if [ -f trivy-results.sarif ]; then
             echo "✓ Trivy SARIF created successfully"
@@ -102,66 +102,77 @@ jobs:
           else
             echo "⚠ Trivy SARIF not created, creating empty SARIF"
             cat > trivy-results.sarif <<'EOSARIF'
-          {
-            "version": "2.1.0",
-            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-            "runs": [{
-              "tool": {
-                "driver": {
-                  "name": "Trivy",
-                  "version": "latest"
-                }
-              },
-              "results": []
-            }]
-          }
-          EOSARIF
-            fi
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [{
+    "tool": {
+      "driver": {
+        "name": "Trivy",
+        "version": "latest"
+      }
+    },
+    "results": []
+  }]
+}
+EOSARIF
+          fi
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && hashFiles('trivy-results.sarif') != ''
         with:
           sarif_file: trivy-results.sarif
           category: trivy-container
 
-      # ===== TFSEC WITH SARIF OUTPUT (FIXED) =====
+      # ===== TFSEC WITH SARIF OUTPUT =====
       - name: Infrastructure scan (tfsec)
         run: |
-          # Run tfsec and save directly to workspace
+          mkdir -p tfsec-output
+          # Use the official tfsec image and write SARIF into tfsec-output
           docker run --rm \
             -v "${{ github.workspace }}":/src \
-            aquasecurity/tfsec:latest /src \
-            --format sarif --out /src/tfsec-results.sarif || true
-          
-          # Check if file was created
-          if [ -f tfsec-results.sarif ]; then
+            -v "${{ github.workspace }}/tfsec-output":/out \
+            tfsec/tfsec:latest /src \
+            --format sarif --out /out/tfsec-results.sarif || true
+
+          # Verify or create fallback SARIF
+          if [ -f tfsec-output/tfsec-results.sarif ]; then
             echo "✓ tfsec SARIF created successfully"
-            ls -lh tfsec-results.sarif
+            ls -lh tfsec-output/tfsec-results.sarif
           else
             echo "⚠ tfsec SARIF not created, creating empty SARIF"
-            cat > tfsec-results.sarif <<'EOSARIF'
-            {
-              "version": "2.1.0",
-              "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-              "runs": [{
-                "tool": {
-                  "driver": {
-                    "name": "tfsec",
-                    "version": "latest"
-                  }
-                },
-                "results": []
-              }]
-            }
-            EOSARIF
-                      fi
+            cat > tfsec-output/tfsec-results.sarif <<'EOSARIF'
+{
+  "version": "2.1.0",
+  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+  "runs": [{
+    "tool": {
+      "driver": {
+        "name": "tfsec",
+        "version": "latest"
+      }
+    },
+    "results": []
+  }]
+}
+EOSARIF
+          fi
+
+      - name: Check tfsec SARIF exists
+        id: tfsec-check
+        run: |
+          if [ -f tfsec-output/tfsec-results.sarif ]; then
+            echo "tfsec=true" >> $GITHUB_OUTPUT
+          else
+            echo "tfsec=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload tfsec results to GitHub Security
+        if: steps.tfsec-check.outputs.tfsec == 'true'
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
         with:
-          sarif_file: tfsec-results.sarif
+          sarif_file: tfsec-output/tfsec-results.sarif
           category: tfsec
 
       # ===== GITLEAKS WITH SARIF CONVERSION (FIXED) =====
@@ -174,7 +185,7 @@ jobs:
             --report-format json \
             --report-path /repo/gitleaks-report.json \
             --no-git || true
-          
+
           # Check if report was created
           if [ -f gitleaks-report.json ]; then
             echo "✓ Gitleaks report created"
@@ -189,10 +200,10 @@ jobs:
         run: |
           python3 - <<'EOF'
           import json, os
-          
+
           src = "gitleaks-report.json"
           dst = "gitleaks-results.sarif"
-          
+
           # Read the gitleaks report
           if os.path.exists(src):
               with open(src) as f:
@@ -205,7 +216,7 @@ jobs:
           else:
               print(f"⚠ {src} not found, creating empty results")
               data = []
-          
+
           # Convert to SARIF
           results = []
           for finding in data:
@@ -220,7 +231,7 @@ jobs:
                       }
                   }]
               })
-          
+
           sarif = {
               "version": "2.1.0",
               "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
@@ -234,13 +245,13 @@ jobs:
                   "results": results
               }]
           }
-          
+
           with open(dst, "w") as f:
               json.dump(sarif, f, indent=2)
-          
+
           print(f"✓ Wrote {dst} with {len(results)} findings")
           EOF
-          
+
           # Verify the file was created
           if [ -f gitleaks-results.sarif ]; then
             echo "✓ SARIF file created successfully"
@@ -252,7 +263,7 @@ jobs:
 
       - name: Upload Gitleaks results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always()
+        if: always() && hashFiles('gitleaks-results.sarif') != ''
         with:
           sarif_file: gitleaks-results.sarif
           category: gitleaks
@@ -288,6 +299,6 @@ jobs:
             semgrep-results.sarif
             dependency-check-report/
             trivy-results.sarif
-            tfsec-results.sarif
+            tfsec-output/
             gitleaks-report.json
             gitleaks-results.sarif

@@ -68,7 +68,7 @@ jobs:
 
       - name: Upload Semgrep results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('semgrep-results.sarif') != ''
+        if: "always() && hashFiles('semgrep-results.sarif') != ''"
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
@@ -102,25 +102,25 @@ jobs:
           else
             echo "⚠ Trivy SARIF not created, creating empty SARIF"
             cat > trivy-results.sarif <<'EOSARIF'
-{
-  "version": "2.1.0",
-  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-  "runs": [{
-    "tool": {
-      "driver": {
-        "name": "Trivy",
-        "version": "latest"
-      }
-    },
-    "results": []
-  }]
-}
-EOSARIF
+          {
+            "version": "2.1.0",
+            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+            "runs": [{
+              "tool": {
+                "driver": {
+                  "name": "Trivy",
+                  "version": "latest"
+                }
+              },
+              "results": []
+            }]
+          }
+          EOSARIF
           fi
 
       - name: Upload Trivy results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('trivy-results.sarif') != ''
+        if: "always() && hashFiles('trivy-results.sarif') != ''"
         with:
           sarif_file: trivy-results.sarif
           category: trivy-container
@@ -143,20 +143,20 @@ EOSARIF
           else
             echo "⚠ tfsec SARIF not created, creating empty SARIF"
             cat > tfsec-output/tfsec-results.sarif <<'EOSARIF'
-{
-  "version": "2.1.0",
-  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-  "runs": [{
-    "tool": {
-      "driver": {
-        "name": "tfsec",
-        "version": "latest"
-      }
-    },
-    "results": []
-  }]
-}
-EOSARIF
+          {
+            "version": "2.1.0",
+            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+            "runs": [{
+              "tool": {
+                "driver": {
+                  "name": "tfsec",
+                  "version": "latest"
+                }
+              },
+              "results": []
+            }]
+          }
+          EOSARIF
           fi
 
       - name: Check tfsec SARIF exists
@@ -169,7 +169,7 @@ EOSARIF
           fi
 
       - name: Upload tfsec results to GitHub Security
-        if: steps.tfsec-check.outputs.tfsec == 'true'
+        if: "steps.tfsec-check.outputs.tfsec == 'true'"
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: tfsec-output/tfsec-results.sarif
@@ -198,7 +198,7 @@ EOSARIF
       - name: Convert Gitleaks to SARIF
         if: always()
         run: |
-          python3 - <<'EOF'
+          python3 << 'EOF'
           import json, os
 
           src = "gitleaks-report.json"
@@ -263,7 +263,7 @@ EOSARIF
 
       - name: Upload Gitleaks results to GitHub Security
         uses: github/codeql-action/upload-sarif@v3
-        if: always() && hashFiles('gitleaks-results.sarif') != ''
+        if: "always() && hashFiles('gitleaks-results.sarif') != ''"
         with:
           sarif_file: gitleaks-results.sarif
           category: gitleaks

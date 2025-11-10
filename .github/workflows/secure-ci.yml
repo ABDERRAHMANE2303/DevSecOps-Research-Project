@@ -20,17 +20,21 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      # 🧩 Checkout source
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
+      # 🧩 PHP setup
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
 
+      # 🧩 Install project dependencies
       - name: Install dependencies
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      # ✅ Code Quality
+      # ✅ Code Quality Checks
       - name: PHP_CodeSniffer (PSR12)
         run: vendor/bin/phpcs --standard=PSR12 app || true
 
@@ -42,7 +46,7 @@ jobs:
 
       # ✅ Static Application Security Testing (SAST)
       - name: Semgrep Security Scan
-        uses: returntocorp/semgrep-action@v1
+        uses: returntocorp/semgrep-action@v2
         with:
           config: "p/php" # built-in PHP security rules
           output: semgrep-report.json
@@ -51,7 +55,7 @@ jobs:
 
       # ✅ Dependency Vulnerability Scanning
       - name: OWASP Dependency Check
-        uses: dependency-check/Dependency-Check_Action@main
+        uses: dependency-check/Dependency-Check_Action@v7
         with:
           project: "PHP App"
           scan: "."
@@ -61,7 +65,7 @@ jobs:
 
       # ✅ Secrets Scanning
       - name: Secret Scan (Gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         with:
           config-path: .github/gitleaks.toml
           fail: true
@@ -71,22 +75,22 @@ jobs:
 
       # ✅ Docker Security
       - name: Dockerfile Lint
-        uses: hadolint/hadolint-action@v2
+        uses: hadolint/hadolint-action@v3.1.0
         with:
           dockerfile: Dockerfile
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
 
       - name: Build Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: false
           tags: myapp:${{ github.sha }}
 
       - name: Container scan with Trivy
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.20.0
         with:
           image-ref: myapp:${{ github.sha }}
           format: json
@@ -98,7 +102,7 @@ jobs:
 
       # ✅ Infrastructure as Code Security
       - name: Infrastructure scan (tfsec)
-        uses: aquasecurity/tfsec-action@v1.0.0
+        uses: aquasecurity/tfsec-action@v1.0.3
         with:
           args: --format json --out tfsec-results.json
         continue-on-error: true

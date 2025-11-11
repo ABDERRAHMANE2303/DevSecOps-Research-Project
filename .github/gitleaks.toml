@@ -1,38 +1,38 @@
+extends = "github://gitleaks/gitleaks/v8/config/gitleaks.toml"
 title = "Gitleaks Configuration"
 
 [allowlist]
-# Paths or files to ignore (e.g., test data, vendor)
+# Treat these as regex-ish globs; they match paths from repo root
 paths = [
-  "vendor/",
-  "tests/",
-  "node_modules/",
-  "storage/",
-  "public/"
+  "^vendor/.*",
+  "^node_modules/.*",
+  ".*\\.phar$"
+  # Avoid blanket ignores for public/ and storage/
 ]
 
-# Known patterns that look like secrets but aren't
+# Examples of known-safe tokens (keep specific)
 regexes = [
   "example_api_key_[0-9A-Za-z]+",
   "dummy_token_[0-9A-Za-z]+"
 ]
 
-# Commit authors to ignore (e.g., bots)
 commits = [
   "dependabot",
   "github-actions"
 ]
 
+# Optional: extra rules (defaults are still loaded because of `extends`)
 [[rules]]
 description = "Generic API Key"
 regex = '''(?i)(api[_-]?key|token|secret|password)[=:]\s*['"]?[A-Za-z0-9\-_]{20,}['"]?'''
 tags = ["key", "api", "generic"]
 
 [[rules]]
-description = "AWS Access Key"
+description = "AWS Access Key (extra)"
 regex = '''AKIA[0-9A-Z]{16}'''
 tags = ["aws", "key"]
 
 [[rules]]
-description = "Private RSA Key"
+description = "Private RSA Key (extra)"
 regex = '''-----BEGIN RSA PRIVATE KEY-----'''
 tags = ["rsa", "private", "key"]

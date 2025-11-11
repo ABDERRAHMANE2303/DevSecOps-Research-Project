@@ -1,26 +1,11 @@
-name: Secure PHP CI Pipeline
-
-on:
-  push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
-
-permissions:
-  contents: read
-  actions: read
-  security-events: write
-
-concurrency:
-  group: ${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   security-checks:
     runs-on: ubuntu-latest
+    env:
+      PHP_PATHS: "app"
 
     steps:
-      - name: Checkout repository
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Setup PHP
@@ -33,253 +18,139 @@ jobs:
         with:
           path: ~/.cache/composer
           key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-composer-
+          restore-keys: ${{ runner.os }}-composer-
 
-      - name: Install dependencies
+      - name: Install deps
         run: composer install --no-interaction --prefer-dist --no-progress
 
-      - name: PHP_CodeSniffer (PSR12)
+      # ---------- PHP quality ----------
+      - name: PHPCS (PSR12)
         run: |
           if [ -x vendor/bin/phpcs ]; then
-            vendor/bin/phpcs --standard=PSR12 app || true
-          else
-            echo "phpcs not installed"
+            vendor/bin/phpcs --standard=PSR12 $PHP_PATHS || true
           fi
-
-      - name: PHPStan Analysis
+      - name: PHPStan
         run: |
           if [ -x vendor/bin/phpstan ]; then
-            vendor/bin/phpstan analyse --level=max app || true
-          else
-            echo "phpstan not installed"
+            vendor/bin/phpstan analyse --level=max $PHP_PATHS || true
           fi
-
-      - name: Dependency Audit
+      - name: Composer Audit
         run: composer audit --no-interaction || true
 
-      # ===== SEMGREP WITH SARIF OUTPUT =====
-      - name: Semgrep Security Scan
+      # ---------- Semgrep (broad, PHP only) ----------
+      - name: Semgrep SAST
         run: |
           python3 -m pip install --user semgrep
           export PATH="$HOME/.local/bin:$PATH"
-          semgrep --version
-          semgrep --config p/php --sarif --output semgrep-results.sarif . || true
-
-      - name: Upload Semgrep results to GitHub Security
+          semgrep --sarif --output semgrep-results.sarif \
+            --config p/owasp-top-ten \
+            --config p/security-audit \
+            --config p/php \
+            --config p/secrets \
+            .
+          # ensure we didn't produce an empty or broken SARIF
+          jq -e '.runs[0].results' semgrep-results.sarif >/dev/null
+      - name: Upload Semgrep
         uses: github/codeql-action/upload-sarif@v3
-        if: "always() && hashFiles('semgrep-results.sarif') != ''"
         with:
           sarif_file: semgrep-results.sarif
           category: semgrep
 
-      # ===== TRIVY WITH SARIF OUTPUT =====
-      - name: Build Docker image
+      # ---------- Trivy (image + fs fallback) ----------
+      - name: Build image
+        if: ${{ hashFiles('Dockerfile') != '' }}
+        run: docker build -t myapp:${{ github.sha }} .
+
+      - name: Trivy image scan
+        if: ${{ hashFiles('Dockerfile') != '' }}
         run: |
-          if [ -f Dockerfile ]; then
-            docker build -t myapp:${{ github.sha }} . || echo "Docker build failed"
-          else
-            echo "No Dockerfile found"
-          fi
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "${{ github.workspace }}":/w aquasecurity/trivy:latest image \
+            --scanners vuln --severity CRITICAL,HIGH,MEDIUM \
+            --format sarif --output /w/trivy-results.sarif myapp:${{ github.sha }}
+          jq -e '.runs[0].results' trivy-results.sarif >/dev/null
 
-      - name: Container scan with Trivy
+      - name: Trivy fs fallback
+        if: ${{ hashFiles('trivy-results.sarif') == '' }}
         run: |
-          # Run Trivy and save directly to workspace
-          docker run --rm \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "${{ github.workspace }}":/workspace \
-            aquasecurity/trivy:latest image \
-            --scanners vuln \
-            --format sarif \
-            --output /workspace/trivy-results.sarif \
-            --severity CRITICAL,HIGH \
-            myapp:${{ github.sha }} || true
-
-          # Check if file was created
-          if [ -f trivy-results.sarif ]; then
-            echo "✓ Trivy SARIF created successfully"
-            ls -lh trivy-results.sarif
-          else
-            echo "⚠ Trivy SARIF not created, creating empty SARIF"
-            cat > trivy-results.sarif <<'EOSARIF'
-          {
-            "version": "2.1.0",
-            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-            "runs": [{
-              "tool": {
-                "driver": {
-                  "name": "Trivy",
-                  "version": "latest"
-                }
-              },
-              "results": []
-            }]
-          }
-          EOSARIF
-          fi
-
-      - name: Upload Trivy results to GitHub Security
+          docker run --rm -v "${{ github.workspace }}":/w aquasecurity/trivy:latest fs \
+            --scanners vuln --severity CRITICAL,HIGH,MEDIUM \
+            --format sarif --output /w/trivy-results.sarif /w
+          jq -e '.runs[0].results' trivy-results.sarif >/dev/null
+      - name: Upload Trivy
         uses: github/codeql-action/upload-sarif@v3
-        if: "always() && hashFiles('trivy-results.sarif') != ''"
         with:
           sarif_file: trivy-results.sarif
-          category: trivy-container
+          category: trivy
 
-      # ===== TFSEC WITH SARIF OUTPUT =====
-      - name: Infrastructure scan (tfsec)
+      # ---------- Trivy config (Dockerfile & docker-compose, optional) ----------
+      - name: Trivy config scan
+        if: ${{ hashFiles('Dockerfile') != '' || hashFiles('docker-compose*.yml') != '' }}
         run: |
-          mkdir -p tfsec-output
-          # Use the official tfsec image and write SARIF into tfsec-output
-          docker run --rm \
-            -v "${{ github.workspace }}":/src \
-            -v "${{ github.workspace }}/tfsec-output":/out \
-            tfsec/tfsec:latest /src \
-            --format sarif --out /out/tfsec-results.sarif || true
-
-          # Verify or create fallback SARIF
-          if [ -f tfsec-output/tfsec-results.sarif ]; then
-            echo "✓ tfsec SARIF created successfully"
-            ls -lh tfsec-output/tfsec-results.sarif
-          else
-            echo "⚠ tfsec SARIF not created, creating empty SARIF"
-            cat > tfsec-output/tfsec-results.sarif <<'EOSARIF'
-          {
-            "version": "2.1.0",
-            "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-            "runs": [{
-              "tool": {
-                "driver": {
-                  "name": "tfsec",
-                  "version": "latest"
-                }
-              },
-              "results": []
-            }]
-          }
-          EOSARIF
-          fi
-
-      - name: Check tfsec SARIF exists
-        id: tfsec-check
-        run: |
-          if [ -f tfsec-output/tfsec-results.sarif ]; then
-            echo "tfsec=true" >> $GITHUB_OUTPUT
-          else
-            echo "tfsec=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Upload tfsec results to GitHub Security
-        if: "steps.tfsec-check.outputs.tfsec == 'true'"
+          docker run --rm -v "${{ github.workspace }}":/w aquasecurity/trivy:latest config \
+            --format sarif --output /w/trivy-config.sarif /w
+          jq -e '.runs[0].results' trivy-config.sarif >/dev/null
+      - name: Upload Trivy config
+        if: ${{ hashFiles('Dockerfile') != '' || hashFiles('docker-compose*.yml') != '' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
-          sarif_file: tfsec-output/tfsec-results.sarif
+          sarif_file: trivy-config.sarif
+          category: trivy-config
+
+      # ---------- tfsec (Terraform present in your repo) ----------
+      - name: tfsec
+        if: ${{ hashFiles('terraform/**/*.tf') != '' }}
+        run: |
+          mkdir -p tfsec-out
+          docker run --rm -v "${{ github.workspace }}":/src -v "${{ github.workspace }}/tfsec-out":/out tfsec/tfsec:latest /src/terraform \
+            --format sarif --out /out/tfsec-results.sarif
+          jq -e '.runs[0].results' tfsec-out/tfsec-results.sarif >/dev/null
+      - name: Upload tfsec
+        if: ${{ hashFiles('terraform/**/*.tf') != '' }}
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: tfsec-out/tfsec-results.sarif
           category: tfsec
 
-      # ===== GITLEAKS WITH SARIF CONVERSION (FIXED) =====
-      - name: Secret Scan (Gitleaks)
+      # ---------- Ansible ----------
+      - name: ansible-lint
+        if: ${{ hashFiles('ansible/**/*.yml') != '' }}
         run: |
-          docker run --rm \
-            -v "${{ github.workspace }}":/repo \
-            zricethezav/gitleaks:latest detect \
-            -s /repo \
-            --report-format json \
-            --report-path /repo/gitleaks-report.json \
-            --no-git || true
+          python3 -m pip install --user ansible ansible-lint yamllint
+          export PATH="$HOME/.local/bin:$PATH"
+          ansible-lint ansible -p || true
 
-          # Check if report was created
-          if [ -f gitleaks-report.json ]; then
-            echo "✓ Gitleaks report created"
-            ls -lh gitleaks-report.json
-          else
-            echo "⚠ No gitleaks report, creating empty file"
-            echo "[]" > gitleaks-report.json
-          fi
-
-      - name: Convert Gitleaks to SARIF
-        if: always()
+      # ---------- Gitleaks (respect config; scans history) ----------
+      - name: Gitleaks
         run: |
-          python3 << 'EOF'
-          import json, os
-
-          src = "gitleaks-report.json"
-          dst = "gitleaks-results.sarif"
-
-          # Read the gitleaks report
-          if os.path.exists(src):
-              with open(src) as f:
-                  content = f.read().strip()
-                  # Handle empty or invalid JSON
-                  if not content or content == "[]":
-                      data = []
-                  else:
-                      data = json.loads(content)
-          else:
-              print(f"⚠ {src} not found, creating empty results")
-              data = []
-
-          # Convert to SARIF
-          results = []
-          for finding in data:
-              results.append({
-                  "ruleId": finding.get("RuleID", "secret-detected"),
-                  "level": "error",
-                  "message": {"text": finding.get("Description", "Secret detected")},
-                  "locations": [{
-                      "physicalLocation": {
-                          "artifactLocation": {"uri": finding.get("File", "unknown")},
-                          "region": {"startLine": finding.get("StartLine", 1)}
-                      }
-                  }]
-              })
-
-          sarif = {
-              "version": "2.1.0",
-              "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
-              "runs": [{
-                  "tool": {
-                      "driver": {
-                          "name": "Gitleaks",
-                          "version": "latest"
-                      }
-                  },
-                  "results": results
-              }]
-          }
-
-          with open(dst, "w") as f:
-              json.dump(sarif, f, indent=2)
-
-          print(f"✓ Wrote {dst} with {len(results)} findings")
+          docker run --rm -v "${{ github.workspace }}":/repo zricethezav/gitleaks:latest detect \
+            -s /repo -c /repo/.gitleaks.toml \
+            --report-format json --report-path /repo/gitleaks-report.json
+          python3 - << 'EOF'
+          import json
+          d=[]
+          try: d=json.load(open("gitleaks-report.json"))
+          except: pass
+          res=[{"ruleId":x.get("RuleID","secret"),"level":"error",
+                "message":{"text":x.get("Description","Secret detected")},
+                "locations":[{"physicalLocation":{"artifactLocation":{"uri":x.get("File","unknown")},
+                "region":{"startLine":x.get("StartLine",1)}}}]} for x in d]
+          sarif={"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Gitleaks"}},"results":res}]}
+          open("gitleaks-results.sarif","w").write(json.dumps(sarif,indent=2))
+          print("converted", len(res), "findings")
           EOF
-
-          # Verify the file was created
-          if [ -f gitleaks-results.sarif ]; then
-            echo "✓ SARIF file created successfully"
-            ls -lh gitleaks-results.sarif
-          else
-            echo "✗ Failed to create SARIF file"
-            exit 1
-          fi
-
-      - name: Upload Gitleaks results to GitHub Security
+          jq -e '.runs[0].results' gitleaks-results.sarif >/dev/null
+      - name: Upload Gitleaks
         uses: github/codeql-action/upload-sarif@v3
-        if: "always() && hashFiles('gitleaks-results.sarif') != ''"
         with:
           sarif_file: gitleaks-results.sarif
           category: gitleaks
 
-      # ===== HADOLINT =====
-      - name: Dockerfile Lint (Hadolint)
-        run: |
-          if [ -f Dockerfile ]; then
-            docker run --rm \
-              -v "${{ github.workspace }}":/data \
-              hadolint/hadolint:v2.12.0 hadolint /data/Dockerfile || true
-          else
-            echo "No Dockerfile to lint"
-          fi
+      # ---------- Hadolint ----------
+      - name: Hadolint
+        if: ${{ hashFiles('Dockerfile') != '' }}
+        run: docker run --rm -v "${{ github.workspace }}":/d hadolint/hadolint:v2.12.0 hadolint /d/Dockerfile || true
 
-      # ===== UPLOAD ALL REPORTS =====
+      # ---------- Artifacts + summary ----------
       - name: Upload Security Reports
         uses: actions/upload-artifact@v4
         if: always()
@@ -288,87 +159,36 @@ jobs:
           path: |
             semgrep-results.sarif
             trivy-results.sarif
-            tfsec-output/
+            trivy-config.sarif
+            tfsec-out/
             gitleaks-report.json
             gitleaks-results.sarif
-      
-      # ===== SECURITY SUMMARY =====
-      - name: Generate Security Summary
+
+      - name: Security Summary
         if: always()
         run: |
-          python3 << 'EOF'
-          import json
-          import os
-          from pathlib import Path
+          python3 - << 'EOF'
+          import json,os
+          def c(p):
+            try: return len(json.load(open(p)).get("runs",[{}])[0].get("results",[]))
+            except: return 0
+          semgrep=c("semgrep-results.sarif")
+          trivy=c("trivy-results.sarif")
+          trivy_cfg=c("trivy-config.sarif")
+          tfsec=c("tfsec-out/tfsec-results.sarif")
+          gitleaks=c("gitleaks-results.sarif")
+          total=sum([semgrep,trivy,trivy_cfg,tfsec,gitleaks])
+          md=f"""# 🔒 Security Scan Summary
 
-          def count_sarif_results(file_path):
-              """Count findings in a SARIF file"""
-              try:
-                  if not os.path.exists(file_path):
-                      return 0
-                  with open(file_path) as f:
-                      data = json.load(f)
-                      if 'runs' in data and len(data['runs']) > 0:
-                          return len(data['runs'][0].get('results', []))
-              except Exception as e:
-                  print(f"Error reading {file_path}: {e}")
-              return 0
+          **Total Security Findings:** {total}
 
-          # Count findings from each tool
-          semgrep_count = count_sarif_results('semgrep-results.sarif')
-          trivy_count = count_sarif_results('trivy-results.sarif')
-          tfsec_count = count_sarif_results('tfsec-output/tfsec-results.sarif')
-          gitleaks_count = count_sarif_results('gitleaks-results.sarif')
-
-          total_findings = semgrep_count + trivy_count + tfsec_count + gitleaks_count
-
-          # Generate markdown summary
-          summary = f"""# 🔒 Security Scan Summary
-
-          ## Overview
-          **Total Security Findings:** {total_findings}
-
-          ## Results by Tool
-
-          | Tool | Purpose | Findings |
-          |------|---------|----------|
-          | 🔍 Semgrep | SAST (Code Analysis) | {semgrep_count} |
-          | 🐳 Trivy | Container Vulnerabilities | {trivy_count} |
-          | 🏗️ tfsec | Infrastructure Security | {tfsec_count} |
-          | 🔑 Gitleaks | Secret Detection | {gitleaks_count} |
-
-          ## Additional Scans Completed
-          - ✅ PHP_CodeSniffer (PSR12)
-          - ✅ PHPStan Analysis
-          - ✅ Composer Dependency Audit
-          - ✅ Hadolint (Dockerfile Linting)
-
-          ## 📊 Status
+          | Tool | Scope | Findings |
+          |------|-------|----------|
+          | Semgrep | PHP SAST | {semgrep} |
+          | Trivy | Image/FS vulns | {trivy} |
+          | Trivy (config) | Docker/Compose misconfig | {trivy_cfg} |
+          | tfsec | Terraform IaC | {tfsec} |
+          | Gitleaks | Secrets (incl. history) | {gitleaks} |
           """
-
-          if total_findings == 0:
-              summary += "🎉 **No security issues found!** All scans passed successfully.\n"
-          elif total_findings < 10:
-              summary += f"⚠️ **{total_findings} issues found.** Review the Security tab for details.\n"
-          else:
-              summary += f"🚨 **{total_findings} issues found.** Please review and address critical findings.\n"
-
-          summary += """
-          ## 📁 Artifacts
-          All detailed reports are available in the `security-reports` artifact.
-
-          ## 🔗 Next Steps
-          1. Review findings in the [Security tab](../../security/code-scanning)
-          2. Check the uploaded artifacts for detailed reports
-          3. Address critical and high severity issues first
-          """
-
-          # Write to GitHub Step Summary
-          github_step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
-          if github_step_summary:
-              with open(github_step_summary, 'w') as f:
-                  f.write(summary)
-              print("✓ Summary written to GitHub Step Summary")
-          else:
-              print(summary)
+          open(os.environ["GITHUB_STEP_SUMMARY"],"w").write(md)
           EOF

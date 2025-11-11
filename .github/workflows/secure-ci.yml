@@ -115,14 +115,15 @@ jobs:
 
       # ---------- tfsec (Terraform present in your repo) ----------
       - name: tfsec
-        if: ${{ hashFiles('terraform/**/*.tf') != '' }}
+        if: ${{ hashFiles('infrastructure/terraform/**/*.tf') != '' }}
         run: |
           mkdir -p tfsec-out
           docker run --rm -v "${{ github.workspace }}":/src -v "${{ github.workspace }}/tfsec-out":/out tfsec/tfsec:latest /src/terraform \
             --format sarif --out /out/tfsec-results.sarif
           jq -e '.runs[0].results' tfsec-out/tfsec-results.sarif >/dev/null
+
       - name: Upload tfsec
-        if: ${{ hashFiles('terraform/**/*.tf') != '' }}
+        if: ${{ hashFiles('infrastructure/terraform/**/*.tf') != '' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: tfsec-out/tfsec-results.sarif

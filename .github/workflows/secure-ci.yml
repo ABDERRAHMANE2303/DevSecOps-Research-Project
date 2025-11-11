@@ -59,7 +59,7 @@ jobs:
         run: |
           python3 -m pip install --user semgrep
           export PATH="$HOME/.local/bin:$PATH"
-          semgrep ci --sarif --output semgrep-results.sarif \
+          semgrep --sarif --output semgrep-results.sarif \
             --config "p/php" \
             --config "p/owasp-top-ten" \
             --config "p/security-audit" \

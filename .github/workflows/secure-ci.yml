@@ -268,25 +268,6 @@ jobs:
           sarif_file: gitleaks-results.sarif
           category: gitleaks
 
-      # ===== DEPENDENCY CHECK =====
-      - name: Cache OWASP Dependency Check data
-        uses: actions/cache@v4
-        with:
-          path: dependency-check-data
-          key: ${{ runner.os }}-dependency-check-${{ hashFiles('**/composer.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-dependency-check-
-
-      - name: OWASP Dependency Check
-        run: |
-          mkdir -p dependency-check-report dependency-check-data
-          docker run --rm \
-            -v "${{ github.workspace }}":/src \
-            -v "${{ github.workspace }}/dependency-check-report":/report \
-            -v "${{ github.workspace }}/dependency-check-data":/usr/share/dependency-check/data \
-            owasp/dependency-check:latest \
-            --project "PHP App" --scan /src --format HTML --out /report || true
-
       # ===== HADOLINT =====
       - name: Dockerfile Lint (Hadolint)
         run: |
@@ -306,7 +287,6 @@ jobs:
           name: security-reports
           path: |
             semgrep-results.sarif
-            dependency-check-report/
             trivy-results.sarif
             tfsec-output/
             gitleaks-report.json
@@ -361,7 +341,6 @@ jobs:
           - ✅ PHP_CodeSniffer (PSR12)
           - ✅ PHPStan Analysis
           - ✅ Composer Dependency Audit
-          - ✅ OWASP Dependency Check
           - ✅ Hadolint (Dockerfile Linting)
 
           ## 📊 Status

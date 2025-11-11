@@ -55,18 +55,26 @@ jobs:
         run: composer audit --no-interaction || true
 
       # ---------- Semgrep (broad, PHP only) ----------
-      - name: Semgrep SAST
+      - name: Semgrep SAST (PHP)
         run: |
           python3 -m pip install --user semgrep
           export PATH="$HOME/.local/bin:$PATH"
           semgrep --sarif --output semgrep-results.sarif \
-            --config p/owasp-top-ten \
-            --config p/security-audit \
-            --config p/php \
-            --config p/secrets \
-            .
-          # ensure we didn't produce an empty or broken SARIF
+            --lang php \
+            --config "p/php" \
+            --config "p/owasp-top-ten" \
+            --config "p/security-audit" \
+            --config "r/php" \
+            --config "r/php-security" \
+            --config "r/php-laravel" \
+            --config "r/php-symfony" \
+            --config "r/php-wordpress" \
+            --config "p/secrets" \
+            --exclude vendor \
+            --exclude node_modules \
+            $PHP_PATHS
           jq -e '.runs[0].results' semgrep-results.sarif >/dev/null
+
       - name: Upload Semgrep
         uses: github/codeql-action/upload-sarif@v3
         with:

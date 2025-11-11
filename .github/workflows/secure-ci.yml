@@ -233,6 +233,64 @@ jobs:
         if: ${{ hashFiles('Dockerfile') != '' }}
         run: docker run --rm -v "${{ github.workspace }}":/d hadolint/hadolint:v2.12.0 hadolint /d/Dockerfile || true
 
+      # ---------- OWASP ZAP DAST ----------
+      - name: Start PHP app (background)
+        run: |
+          php -S 0.0.0.0:8080 -t app & 
+          sleep 10  # Give the app time to start
+
+      - name: ZAP Baseline DAST
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}":/zap/wrk/:rw \
+            -t owasp/zap2docker-stable zap-baseline.py \
+            -t http://localhost:8080 \
+            -r zap-report.html \
+            -J zap-results.json \
+            -w zap-warnings.txt \
+            || true
+
+          # Convert ZAP JSON to SARIF
+          python3 - << 'EOF'
+          import json, os
+          src, dst = "zap-results.json", "zap-results.sarif"
+          data = {}
+          if os.path.exists(src):
+              try:
+                  data = json.load(open(src))
+              except Exception as e:
+                  print("⚠️ Could not parse JSON:", e)
+          alerts = data.get("site", [{}])[0].get("alerts", []) if isinstance(data, dict) else []
+          results = [{
+              "ruleId": a.get("pluginid","zap"),
+              "level": "warning",
+              "message": {"text": a.get("alert","DAST alert")},
+              "locations": [{
+                  "physicalLocation": {
+                      "artifactLocation": {"uri": a.get("url","unknown")},
+                      "region": {"startLine": 1}
+                  }
+              }]
+          } for a in alerts]
+          sarif = {
+              "version": "2.1.0",
+              "runs": [{
+                  "tool": {"driver": {"name": "OWASP ZAP"}},
+                  "results": results
+              }]
+          }
+          with open(dst, "w") as f:
+              json.dump(sarif, f, indent=2)
+          print(f"✓ Wrote {len(results)} ZAP findings to SARIF ({dst})")
+          EOF
+
+      - name: Upload ZAP DAST Results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: zap-results.sarif
+          category: zap
+
       # ---------- Artifacts + summary ----------
       - name: Upload Security Reports
         uses: actions/upload-artifact@v4

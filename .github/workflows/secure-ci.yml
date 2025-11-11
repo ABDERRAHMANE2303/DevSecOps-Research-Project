@@ -161,7 +161,6 @@ jobs:
             -s /repo \
             --no-git \
             --redact=0 \
-            --entropy 0 \
             --max-target-megabytes=1000 \
             --report-format json \
             --report-path /repo/gitleaks-report.json \
@@ -175,23 +174,23 @@ jobs:
           if os.path.exists(src):
               try: data = json.load(open(src))
               except: pass
-          results = [{
+          results = [ {
               "ruleId": x.get("RuleID","secret"),
               "level": "error",
               "message": {"text": x.get("Description","Secret detected")},
-              "locations": [{
+              "locations": [ {
                   "physicalLocation": {
                       "artifactLocation": {"uri": x.get("File","unknown")},
                       "region": {"startLine": x.get("StartLine",1)}
                   }
-              }]
-          } for x in data]
+              } ]
+          } for x in data ]
           sarif = {
               "version": "2.1.0",
-              "runs": [{
+              "runs": [ {
                   "tool": {"driver": {"name": "Gitleaks"}},
                   "results": results
-              }]
+              } ]
           }
           json.dump(sarif, open(dst,"w"), indent=2)
           print(f"✓ Converted {len(results)} Gitleaks findings to SARIF")

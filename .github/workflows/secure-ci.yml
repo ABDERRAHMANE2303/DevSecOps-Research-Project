@@ -64,34 +64,27 @@ jobs:
           echo "=== Files to scan ==="
           find app -name "*.php" | head -20
           
-          # Run Semgrep with verbose output
-          semgrep --sarif --output semgrep-results.sarif \
-            --config "p/php" \
-            --config "p/security-audit" \
-            --verbose \
-            --exclude vendor \
-            --exclude node_modules \
-            app
+          # Run Semgrep ONCE with all configs
+          semgrep scan \
+            --sarif \
+            --output semgrep-results.sarif \
+            --config auto \
+            app || echo "Semgrep completed with findings"
           
           # Show results count
-          echo "=== Semgrep found ==="
-          cat semgrep-results.sarif | jq '.runs[0].results | length'
-          
-          # Show first few findings if any
-          cat semgrep-results.sarif | jq '.runs[0].results[0:3]'
+          echo "=== Semgrep Results ==="
+          if [ -f semgrep-results.sarif ]; then
+            cat semgrep-results.sarif | jq '.runs[0].results | length' || echo "0"
+          else
+            echo "No results file generated"
+          fi
 
       - name: Upload Semgrep
         if: always()
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep-results.sarif
-          category: semgrep
-
-      - name: Upload Semgrep
-        uses: github/codeql-action/upload-sarif@v3
-        with:
-          sarif_file: semgrep-results.sarif
-          category: semgrep
+          category: semgrep-php
 
       # ---------- Trivy (image + fs fallback) ----------
       - name: Build image

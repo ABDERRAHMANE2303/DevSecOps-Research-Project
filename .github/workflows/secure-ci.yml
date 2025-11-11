@@ -318,7 +318,8 @@ jobs:
           trivy_cfg=c("trivy-config.sarif")
           tfsec=c("tfsec-out/tfsec-results.sarif")
           gitleaks=c("gitleaks-results.sarif")
-          total=sum([semgrep,trivy,trivy_cfg,tfsec,gitleaks])
+          zap=c("zap-results.sarif")
+          total=sum([semgrep,trivy,trivy_cfg,tfsec,gitleaks,zap])
           md=f"""# 🔒 Security Scan Summary
 
           **Total Security Findings:** {total}
@@ -329,7 +330,9 @@ jobs:
           | Trivy | Image/FS vulns | {trivy} |
           | Trivy (config) | Docker/Compose misconfig | {trivy_cfg} |
           | tfsec | Terraform IaC | {tfsec} |
-          | Gitleaks | Secrets (incl. history) | {gitleaks} |
+          | Gitleaks | Secrets | {gitleaks} |
+          | ZAP | Runtime DAST | {zap} |
           """
+          
           open(os.environ["GITHUB_STEP_SUMMARY"],"w").write(md)
           EOF

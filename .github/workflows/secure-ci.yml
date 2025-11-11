@@ -234,62 +234,100 @@ jobs:
         run: docker run --rm -v "${{ github.workspace }}":/d hadolint/hadolint:v2.12.0 hadolint /d/Dockerfile || true
 
       # ---------- OWASP ZAP DAST ----------
-      - name: Start PHP app (background)
+      - name: Start application container for DAST
+        if: ${{ hashFiles('Dockerfile') != '' }}
         run: |
-          php -S 0.0.0.0:8080 -t app & 
-          sleep 10  # Give the app time to start
+          echo "Starting PHP application for DAST..."
+          docker run -d --name test-app \
+            -p 8080:80 \
+            --health-cmd="curl -fs http://localhost:80 || exit 1" \
+            --health-interval=5s \
+            --health-timeout=3s \
+            --health-retries=10 \
+            myapp:${{ github.sha }} || true
 
-      - name: ZAP Baseline DAST
+          echo "Waiting for the app to become healthy..."
+          timeout 60 bash -c 'until docker inspect --format="{{.State.Health.Status}}" test-app | grep -q "healthy"; do sleep 3; done' || true
+          echo "Application is ready for DAST scanning."
+
+      - name: Fix workspace permissions for ZAP
+        run: sudo chmod -R 777 "${{ github.workspace }}"
+
+      - name: Run OWASP ZAP Full Scan
+        if: always()
         run: |
-          docker run --rm \
-            -v "${{ github.workspace }}":/zap/wrk/:rw \
-            -t owasp/zap2docker-stable zap-baseline.py \
+          echo "Running ZAP full scan..."
+          docker run --rm -v "${{ github.workspace }}":/zap/wrk/:rw --network=host \
+            ghcr.io/zaproxy/zaproxy:stable zap-full-scan.py \
             -t http://localhost:8080 \
-            -r zap-report.html \
-            -J zap-results.json \
-            -w zap-warnings.txt \
-            || true
+            -J report_json.json \
+            -w report_md.md \
+            -r report_html.html \
+            -x report_xml.xml \
+            -I \
+            -a -j -l WARN -T 30 \
+            -z "-config spider.maxDuration=5 -config ajaxSpider.maxDuration=3" || true
 
-          # Convert ZAP JSON to SARIF
-          python3 - << 'EOF'
+          echo "ZAP scan completed. Reports generated:"
+          ls -lh report_* || echo "No reports found"
+      - name: Convert ZAP JSON to SARIF
+        if: always()
+        run: |
+          python3 <<'PYTHON_SCRIPT'
           import json, os
-          src, dst = "zap-results.json", "zap-results.sarif"
-          data = {}
-          if os.path.exists(src):
-              try:
-                  data = json.load(open(src))
-              except Exception as e:
-                  print("⚠️ Could not parse JSON:", e)
-          alerts = data.get("site", [{}])[0].get("alerts", []) if isinstance(data, dict) else []
-          results = [{
-              "ruleId": a.get("pluginid","zap"),
-              "level": "warning",
-              "message": {"text": a.get("alert","DAST alert")},
-              "locations": [{
-                  "physicalLocation": {
-                      "artifactLocation": {"uri": a.get("url","unknown")},
-                      "region": {"startLine": 1}
-                  }
-              }]
-          } for a in alerts]
-          sarif = {
-              "version": "2.1.0",
-              "runs": [{
-                  "tool": {"driver": {"name": "OWASP ZAP"}},
-                  "results": results
-              }]
-          }
-          with open(dst, "w") as f:
-              json.dump(sarif, f, indent=2)
-          print(f"✓ Wrote {len(results)} ZAP findings to SARIF ({dst})")
-          EOF
+          if not os.path.exists("report_json.json"):
+              print("No ZAP report found, creating empty SARIF")
+              empty = {
+                  "version": "2.1.0",
+                  "runs": [{
+                      "tool": {"driver": {"name": "OWASP ZAP"}},
+                      "results": []
+                  }]
+              }
+              json.dump(empty, open("zap-results.sarif", "w"), indent=2)
+              exit(0)
+          zap = json.load(open("report_json.json"))
+          risk_map = {"High": "error", "Medium": "warning", "Low": "note", "Informational": "note"}
+          rules, results = {}, []
+          os.makedirs("zap_scan", exist_ok=True)
+          for site in zap.get("site", []):
+              for alert in site.get("alerts", []):
+                  pid = str(alert.get("pluginid"))
+                  name = alert.get("name", "Unknown")
+                  risk = alert.get("riskdesc", "Low").split()[0]
+                  if pid not in rules:
+                      rules[pid] = {"id": pid, "name": name, "shortDescription": {"text": name}}
+                  for inst in alert.get("instances", []):
+                      uri = inst.get("uri", "unknown")
+                      file_path = "zap_scan/" + os.path.basename(uri)
+                      results.append({
+                          "ruleId": pid,
+                          "level": risk_map.get(risk, "note"),
+                          "message": {"text": name},
+                          "locations": [{
+                              "physicalLocation": {
+                                  "artifactLocation": {"uri": file_path, "uriBaseId": "PROJECTROOT"}
+                              }
+                          }]
+                      })
+          sarif = {"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "OWASP ZAP", "rules": list(rules.values())}}, "results": results}]}
+          json.dump(sarif, open("zap-results.sarif", "w"), indent=2)
+          print(f"SARIF created with {len(results)} findings.")
+          PYTHON_SCRIPT
+        continue-on-error: true
 
       - name: Upload ZAP DAST Results
-        if: always()
+        if: always() && hashFiles('zap-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: zap-results.sarif
           category: zap
+        continue-on-error: true
+
+      - name: Cleanup test container
+        if: always()
+        run: |
+          docker rm -f test-app || true
 
       # ---------- Artifacts + summary ----------
       - name: Upload Security Reports
@@ -305,6 +343,11 @@ jobs:
             gitleaks-report.json
             gitleaks-results.sarif
             zap-results.sarif
+
+            report_json.json
+            report_html.html
+            report_md.md
+            report_xml.xml
             zap-results.json
             zap-report.html
             zap-warnings.txt

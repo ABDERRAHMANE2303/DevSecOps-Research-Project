@@ -160,13 +160,13 @@ jobs:
             zricethezav/gitleaks:latest detect \
             -s /repo \
             --no-git \
-            --redact=false \
+            --redact=0 \
             --entropy 0 \
             --max-target-megabytes=1000 \
             --report-format json \
             --report-path /repo/gitleaks-report.json \
             --verbose
-          
+
           # Convert JSON to SARIF
           python3 - << 'EOF'
           import json, os
@@ -196,6 +196,7 @@ jobs:
           json.dump(sarif, open(dst,"w"), indent=2)
           print(f"✓ Converted {len(results)} Gitleaks findings to SARIF")
           EOF
+
       - name: Upload Gitleaks Results
         uses: github/codeql-action/upload-sarif@v3
         with:

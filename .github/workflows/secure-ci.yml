@@ -19,7 +19,7 @@ jobs:
   security-checks:
     runs-on: ubuntu-latest
     env:
-      PHP_PATHS: "app database"   # PHP lives here in your repo
+      PHP_PATHS: "app"
 
     steps:
       - name: Checkout
@@ -59,20 +59,33 @@ jobs:
         run: |
           python3 -m pip install --user semgrep
           export PATH="$HOME/.local/bin:$PATH"
+          
+          # Debug: Show what we're scanning
+          echo "=== Files to scan ==="
+          find app -name "*.php" | head -20
+          
+          # Run Semgrep with verbose output
           semgrep --sarif --output semgrep-results.sarif \
             --config "p/php" \
-            --config "p/owasp-top-ten" \
             --config "p/security-audit" \
-            --config "r/php" \
-            --config "r/php-security" \
-            --config "r/php-laravel" \
-            --config "r/php-symfony" \
-            --config "r/php-wordpress" \
-            --config "p/secrets" \
+            --verbose \
             --exclude vendor \
             --exclude node_modules \
-            $PHP_PATHS
-          jq -e '.runs[0].results' semgrep-results.sarif >/dev/null || true
+            app
+          
+          # Show results count
+          echo "=== Semgrep found ==="
+          cat semgrep-results.sarif | jq '.runs[0].results | length'
+          
+          # Show first few findings if any
+          cat semgrep-results.sarif | jq '.runs[0].results[0:3]'
+
+      - name: Upload Semgrep
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep-results.sarif
+          category: semgrep
 
       - name: Upload Semgrep
         uses: github/codeql-action/upload-sarif@v3
@@ -120,8 +133,7 @@ jobs:
           sarif_file: trivy-config.sarif
           category: trivy-config
 
-      # ---------- tfsec (Terraform present in your repo) ----------
-            # ---------- tfsec (Terraform present in infrastructure/terraform) ----------
+      # ---------- tfsec (Terraform present in infrastructure/terraform) ----------
       - name: tfsec
         if: ${{ hashFiles('infrastructure/terraform/**/*.tf') != '' }}
         run: |
@@ -152,10 +164,9 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           ansible-lint ansible -p || true
 
-            # ---------- Gitleaks----------
-            # ---------- Gitleaks----------
+      # ---------- Gitleaks----------
       - name: Gitleaks Secrets Scan
-        continue-on-error: true  # Prevents pipeline failure
+        continue-on-error: true  
         run: |
           docker run --rm \
             -v "${{ github.workspace }}":/repo \

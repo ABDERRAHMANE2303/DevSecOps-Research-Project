@@ -304,6 +304,10 @@ jobs:
             tfsec-out/
             gitleaks-report.json
             gitleaks-results.sarif
+            zap-results.sarif
+            zap-results.json
+            zap-report.html
+            zap-warnings.txt
 
       - name: Security Summary
         if: always()
@@ -333,6 +337,6 @@ jobs:
           | Gitleaks | Secrets | {gitleaks} |
           | ZAP | Runtime DAST | {zap} |
           """
-          
+
           open(os.environ["GITHUB_STEP_SUMMARY"],"w").write(md)
           EOF

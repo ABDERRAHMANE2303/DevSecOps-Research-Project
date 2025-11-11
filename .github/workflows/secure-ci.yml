@@ -81,7 +81,7 @@ jobs:
       - name: Trivy image scan
         if: ${{ hashFiles('Dockerfile') != '' }}
         run: |
-          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "${{ github.workspace }}":/w aquasecurity/trivy:latest image \
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "${{ github.workspace }}":/w aquasec/trivy:latest image \
             --scanners vuln --severity CRITICAL,HIGH,MEDIUM \
             --format sarif --output /w/trivy-results.sarif myapp:${{ github.sha }}
           jq -e '.runs[0].results' trivy-results.sarif >/dev/null
@@ -89,7 +89,7 @@ jobs:
       - name: Trivy fs fallback
         if: ${{ hashFiles('trivy-results.sarif') == '' }}
         run: |
-          docker run --rm -v "${{ github.workspace }}":/w aquasecurity/trivy:latest fs \
+          docker run --rm -v "${{ github.workspace }}":/w aquasec/trivy:latest fs \
             --scanners vuln --severity CRITICAL,HIGH,MEDIUM \
             --format sarif --output /w/trivy-results.sarif /w
           jq -e '.runs[0].results' trivy-results.sarif >/dev/null
@@ -103,7 +103,7 @@ jobs:
       - name: Trivy config scan
         if: ${{ hashFiles('Dockerfile') != '' || hashFiles('docker-compose*.yml') != '' }}
         run: |
-          docker run --rm -v "${{ github.workspace }}":/w aquasecurity/trivy:latest config \
+          docker run --rm -v "${{ github.workspace }}":/w aquasec/trivy:latest config \
             --format sarif --output /w/trivy-config.sarif /w
           jq -e '.runs[0].results' trivy-config.sarif >/dev/null
       - name: Upload Trivy config

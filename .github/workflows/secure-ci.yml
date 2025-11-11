@@ -114,15 +114,20 @@ jobs:
           category: trivy-config
 
       # ---------- tfsec (Terraform present in your repo) ----------
+            # ---------- tfsec (Terraform present in infrastructure/terraform) ----------
       - name: tfsec
         if: ${{ hashFiles('infrastructure/terraform/**/*.tf') != '' }}
         run: |
           mkdir -p tfsec-out
+          # Run tfsec as the same user as the GitHub runner to avoid permission issues
           docker run --rm \
+            -u $(id -u):$(id -g) \
             -v "${{ github.workspace }}":/src \
             -v "${{ github.workspace }}/tfsec-out":/out \
             tfsec/tfsec:latest /src/infrastructure/terraform \
-            --format sarif --out /out/tfsec-results.sarif || true
+            --format sarif --out /out/tfsec-results.sarif
+
+          # Validate that the SARIF was successfully created
           jq -e '.runs[0].results' tfsec-out/tfsec-results.sarif >/dev/null
 
       - name: Upload tfsec

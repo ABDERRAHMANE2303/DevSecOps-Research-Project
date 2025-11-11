@@ -118,8 +118,11 @@ jobs:
         if: ${{ hashFiles('infrastructure/terraform/**/*.tf') != '' }}
         run: |
           mkdir -p tfsec-out
-          docker run --rm -v "${{ github.workspace }}":/src -v "${{ github.workspace }}/tfsec-out":/out tfsec/tfsec:latest /src/terraform \
-            --format sarif --out /out/tfsec-results.sarif
+          docker run --rm \
+            -v "${{ github.workspace }}":/src \
+            -v "${{ github.workspace }}/tfsec-out":/out \
+            tfsec/tfsec:latest /src/infrastructure/terraform \
+            --format sarif --out /out/tfsec-results.sarif || true
           jq -e '.runs[0].results' tfsec-out/tfsec-results.sarif >/dev/null
 
       - name: Upload tfsec

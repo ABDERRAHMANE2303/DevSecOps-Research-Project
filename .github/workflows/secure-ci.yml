@@ -79,6 +79,17 @@ jobs:
             echo "No results file generated"
           fi
 
+      - name: Debug - Check PHP files
+        run: |
+          echo "=== PHP files in app directory ==="
+          find app -name "*.php" -type f
+          echo ""
+          echo "=== Total PHP files found ==="
+          find app -name "*.php" -type f | wc -l
+          echo ""
+          echo "=== Sample of first PHP file ==="
+          find app -name "*.php" -type f | head -1 | xargs head -20
+
       - name: Upload Semgrep
         if: always()
         uses: github/codeql-action/upload-sarif@v3

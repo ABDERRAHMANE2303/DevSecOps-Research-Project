@@ -153,8 +153,9 @@ jobs:
           ansible-lint ansible -p || true
 
             # ---------- Gitleaks----------
+            # ---------- Gitleaks----------
       - name: Gitleaks Secrets Scan
-        continue-on-error: true  # <-- prevents job failure
+        continue-on-error: true  # Prevents pipeline failure
         run: |
           docker run --rm \
             -v "${{ github.workspace }}":/repo \
@@ -165,7 +166,7 @@ jobs:
             --max-target-megabytes=1000 \
             --report-format json \
             --report-path /repo/gitleaks-report.json \
-            --verbose
+            --verbose || true  # <-- ensures continuation
 
           # Convert JSON to SARIF
           python3 - << 'EOF'
@@ -173,8 +174,10 @@ jobs:
           src, dst = "gitleaks-report.json", "gitleaks-results.sarif"
           data = []
           if os.path.exists(src):
-              try: data = json.load(open(src))
-              except: pass
+              try:
+                  data = json.load(open(src))
+              except Exception as e:
+                  print("⚠️ Could not parse JSON:", e)
           results = [ {
               "ruleId": x.get("RuleID","secret"),
               "level": "error",
@@ -185,7 +188,7 @@ jobs:
                       "region": {"startLine": x.get("StartLine",1)}
                   }
               } ]
-          } for x in data ]
+          } for x in (data if isinstance(data, list) else []) ]
           sarif = {
               "version": "2.1.0",
               "runs": [ {
@@ -193,11 +196,18 @@ jobs:
                   "results": results
               } ]
           }
-          json.dump(sarif, open(dst,"w"), indent=2)
-          print(f"✓ Converted {len(results)} Gitleaks findings to SARIF")
+          # Always create the SARIF file
+          with open(dst, "w") as f:
+              json.dump(sarif, f, indent=2)
+          print(f"✓ Wrote {len(results)} Gitleaks findings to SARIF ({dst})")
           EOF
 
+          # Verify files exist
+          ls -l gitleaks-report.json || echo "⚠️ No Gitleaks JSON output"
+          ls -l gitleaks-results.sarif || echo "⚠️ No SARIF file written"
+
       - name: Upload Gitleaks Results
+        if: always()  # run even if previous step fails
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks-results.sarif

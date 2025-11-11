@@ -311,3 +311,85 @@ jobs:
             tfsec-output/
             gitleaks-report.json
             gitleaks-results.sarif
+      
+      # ===== SECURITY SUMMARY =====
+      - name: Generate Security Summary
+        if: always()
+        run: |
+          python3 << 'EOF'
+          import json
+          import os
+          from pathlib import Path
+
+          def count_sarif_results(file_path):
+              """Count findings in a SARIF file"""
+              try:
+                  if not os.path.exists(file_path):
+                      return 0
+                  with open(file_path) as f:
+                      data = json.load(f)
+                      if 'runs' in data and len(data['runs']) > 0:
+                          return len(data['runs'][0].get('results', []))
+              except Exception as e:
+                  print(f"Error reading {file_path}: {e}")
+              return 0
+
+          # Count findings from each tool
+          semgrep_count = count_sarif_results('semgrep-results.sarif')
+          trivy_count = count_sarif_results('trivy-results.sarif')
+          tfsec_count = count_sarif_results('tfsec-output/tfsec-results.sarif')
+          gitleaks_count = count_sarif_results('gitleaks-results.sarif')
+
+          total_findings = semgrep_count + trivy_count + tfsec_count + gitleaks_count
+
+          # Generate markdown summary
+          summary = f"""# 🔒 Security Scan Summary
+
+          ## Overview
+          **Total Security Findings:** {total_findings}
+
+          ## Results by Tool
+
+          | Tool | Purpose | Findings |
+          |------|---------|----------|
+          | 🔍 Semgrep | SAST (Code Analysis) | {semgrep_count} |
+          | 🐳 Trivy | Container Vulnerabilities | {trivy_count} |
+          | 🏗️ tfsec | Infrastructure Security | {tfsec_count} |
+          | 🔑 Gitleaks | Secret Detection | {gitleaks_count} |
+
+          ## Additional Scans Completed
+          - ✅ PHP_CodeSniffer (PSR12)
+          - ✅ PHPStan Analysis
+          - ✅ Composer Dependency Audit
+          - ✅ OWASP Dependency Check
+          - ✅ Hadolint (Dockerfile Linting)
+
+          ## 📊 Status
+          """
+
+          if total_findings == 0:
+              summary += "🎉 **No security issues found!** All scans passed successfully.\n"
+          elif total_findings < 10:
+              summary += f"⚠️ **{total_findings} issues found.** Review the Security tab for details.\n"
+          else:
+              summary += f"🚨 **{total_findings} issues found.** Please review and address critical findings.\n"
+
+          summary += """
+          ## 📁 Artifacts
+          All detailed reports are available in the `security-reports` artifact.
+
+          ## 🔗 Next Steps
+          1. Review findings in the [Security tab](../../security/code-scanning)
+          2. Check the uploaded artifacts for detailed reports
+          3. Address critical and high severity issues first
+          """
+
+          # Write to GitHub Step Summary
+          github_step_summary = os.environ.get('GITHUB_STEP_SUMMARY')
+          if github_step_summary:
+              with open(github_step_summary, 'w') as f:
+                  f.write(summary)
+              print("✓ Summary written to GitHub Step Summary")
+          else:
+              print(summary)
+          EOF

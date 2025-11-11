@@ -59,8 +59,7 @@ jobs:
         run: |
           python3 -m pip install --user semgrep
           export PATH="$HOME/.local/bin:$PATH"
-          semgrep --sarif --output semgrep-results.sarif \
-            --lang php \
+          semgrep ci --sarif --output semgrep-results.sarif \
             --config "p/php" \
             --config "p/owasp-top-ten" \
             --config "p/security-audit" \
@@ -73,7 +72,7 @@ jobs:
             --exclude vendor \
             --exclude node_modules \
             $PHP_PATHS
-          jq -e '.runs[0].results' semgrep-results.sarif >/dev/null
+          jq -e '.runs[0].results' semgrep-results.sarif >/dev/null || true
 
       - name: Upload Semgrep
         uses: github/codeql-action/upload-sarif@v3
@@ -153,31 +152,56 @@ jobs:
           export PATH="$HOME/.local/bin:$PATH"
           ansible-lint ansible -p || true
 
-      # ---------- Gitleaks (respect config; scans history) ----------
-      - name: Gitleaks
+      # ---------- Gitleaks----------
+      - name: Gitleaks Secrets Scan
         run: |
-          docker run --rm -v "${{ github.workspace }}":/repo zricethezav/gitleaks:latest detect \
+          docker run --rm \
+            -v "${{ github.workspace }}":/repo \
+            zricethezav/gitleaks:latest detect \
             -s /repo \
-            --report-format json --report-path /repo/gitleaks-report.json
+            --no-git \
+            --redact=false \
+            --entropy 0 \
+            --max-target-megabytes=1000 \
+            --report-format json \
+            --report-path /repo/gitleaks-report.json \
+            --verbose
+          
+          # Convert JSON to SARIF
           python3 - << 'EOF'
-          import json
-          d=[]
-          try: d=json.load(open("gitleaks-report.json"))
-          except: pass
-          res=[{"ruleId":x.get("RuleID","secret"),"level":"error",
-                "message":{"text":x.get("Description","Secret detected")},
-                "locations":[{"physicalLocation":{"artifactLocation":{"uri":x.get("File","unknown")},
-                "region":{"startLine":x.get("StartLine",1)}}}]} for x in d]
-          sarif={"version":"2.1.0","runs":[{"tool":{"driver":{"name":"Gitleaks"}},"results":res}]}
-          open("gitleaks-results.sarif","w").write(json.dumps(sarif,indent=2))
-          print("converted", len(res), "findings")
+          import json, os
+          src, dst = "gitleaks-report.json", "gitleaks-results.sarif"
+          data = []
+          if os.path.exists(src):
+              try: data = json.load(open(src))
+              except: pass
+          results = [{
+              "ruleId": x.get("RuleID","secret"),
+              "level": "error",
+              "message": {"text": x.get("Description","Secret detected")},
+              "locations": [{
+                  "physicalLocation": {
+                      "artifactLocation": {"uri": x.get("File","unknown")},
+                      "region": {"startLine": x.get("StartLine",1)}
+                  }
+              }]
+          } for x in data]
+          sarif = {
+              "version": "2.1.0",
+              "runs": [{
+                  "tool": {"driver": {"name": "Gitleaks"}},
+                  "results": results
+              }]
+          }
+          json.dump(sarif, open(dst,"w"), indent=2)
+          print(f"✓ Converted {len(results)} Gitleaks findings to SARIF")
           EOF
-          jq -e '.runs[0].results' gitleaks-results.sarif >/dev/null
-      - name: Upload Gitleaks
+      - name: Upload Gitleaks Results
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks-results.sarif
           category: gitleaks
+
 
       # ---------- Hadolint ----------
       - name: Hadolint

@@ -46,11 +46,65 @@ jobs:
           if [ -x vendor/bin/phpcs ]; then
             vendor/bin/phpcs --standard=PSR12 $PHP_PATHS || true
           fi
+
       - name: PHPStan
         run: |
           if [ -x vendor/bin/phpstan ]; then
-            vendor/bin/phpstan analyse --level=max $PHP_PATHS || true
+            vendor/bin/phpstan analyse --level=max --error-format=json $PHP_PATHS > phpstan-results.json || true
+            
+            # Convert PHPStan JSON to SARIF
+            python3 - << 'EOF'
+            import json, os
+            phpstan_file = "phpstan-results.json"
+            if os.path.exists(phpstan_file) and os.path.getsize(phpstan_file) > 0:
+                try:
+                    data = json.load(open(phpstan_file))
+                    results = []
+                    for file_path, errors in data.get("files", {}).items():
+                        for error in errors.get("messages", []):
+                            results.append({
+                                "ruleId": "phpstan-error",
+                                "level": "warning",
+                                "message": {"text": error.get("message", "Unknown error")},
+                                "locations": [{
+                                    "physicalLocation": {
+                                        "artifactLocation": {"uri": file_path},
+                                        "region": {"startLine": error.get("line", 1)}
+                                    }
+                                }]
+                            })
+                    sarif = {
+                        "version": "2.1.0",
+                        "runs": [{
+                            "tool": {"driver": {"name": "PHPStan"}},
+                            "results": results
+                        }]
+                    }
+                    with open("phpstan-results.sarif", "w") as f:
+                        json.dump(sarif, f, indent=2)
+                    print(f"✓ Converted {len(results)} PHPStan findings to SARIF")
+                except Exception as e:
+                    print(f"⚠️ Error converting PHPStan results: {e}")
+                    # Create empty SARIF
+                    sarif = {"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "PHPStan"}}, "results": []}]}
+                    with open("phpstan-results.sarif", "w") as f:
+                        json.dump(sarif, f, indent=2)
+            else:
+                # Create empty SARIF if no results
+                sarif = {"version": "2.1.0", "runs": [{"tool": {"driver": {"name": "PHPStan"}}, "results": []}]}
+                with open("phpstan-results.sarif", "w") as f:
+                    json.dump(sarif, f, indent=2)
+            EOF
           fi
+
+      - name: Upload PHPStan Results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: phpstan-results.sarif
+          category: phpstan
+        continue-on-error: true
+
       - name: Composer Audit
         run: composer audit --no-interaction || true
 
@@ -342,6 +396,8 @@ jobs:
         with:
           name: security-reports
           path: |
+            phpstan-results.sarif
+            phpstan-results.json
             semgrep-results.sarif
             trivy-results.sarif
             trivy-config.sarif
@@ -366,20 +422,22 @@ jobs:
           def c(p):
             try: return len(json.load(open(p)).get("runs",[{}])[0].get("results",[]))
             except: return 0
+          phpstan=c("phpstan-results.sarif")
           semgrep=c("semgrep-results.sarif")
           trivy=c("trivy-results.sarif")
           trivy_cfg=c("trivy-config.sarif")
           tfsec=c("tfsec-out/tfsec-results.sarif")
           gitleaks=c("gitleaks-results.sarif")
           zap=c("zap-results.sarif")
-          total=sum([semgrep,trivy,trivy_cfg,tfsec,gitleaks,zap])
+          total=sum([phpstan,semgrep,trivy,trivy_cfg,tfsec,gitleaks,zap])
           md=f"""# 🔒 Security Scan Summary
 
           **Total Security Findings:** {total}
 
           | Tool | Scope | Findings |
           |------|-------|----------|
-          | Semgrep | PHP SAST | {semgrep} |
+          | PHPStan | PHP Static Analysis | {phpstan} |
+          | Semgrep | PHP SAST Security | {semgrep} |
           | Trivy | Image/FS vulns | {trivy} |
           | Trivy (config) | Docker/Compose misconfig | {trivy_cfg} |
           | tfsec | Terraform IaC | {tfsec} |

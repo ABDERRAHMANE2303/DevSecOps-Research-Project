@@ -30,3 +30,6 @@ composer.lock
 # AWS credentials
 .aws/
 aws-credentials.json
+SCAN_SUMMARY.md
+SECURITY_FINDINGS.md
+VULNERABILITY_REDUCTION_GUIDE.md

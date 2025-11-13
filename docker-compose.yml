@@ -21,6 +21,11 @@ services:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       timeout: 20s
       retries: 10
+      interval: 10s
+      start_period: 30s
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
 
   # PHP Apache Web Application
   web:
@@ -40,6 +45,12 @@ services:
       DB_NAME: countries
       DB_USER: webapp_user
       DB_PASSWORD: webapp_password
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    read_only: false  # Apache needs write access to /tmp and logs
+    tmpfs:
+      - /tmp
 
 networks:
   app-network:

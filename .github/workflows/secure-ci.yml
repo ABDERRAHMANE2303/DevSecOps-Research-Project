@@ -64,11 +64,15 @@ jobs:
           echo "=== Files to scan ==="
           find app -name "*.php" | head -20
 
-          # Run Semgrep ONCE with all configs
+          # Run Semgrep with PHP-specific rulesets
           semgrep scan \
             --sarif \
             --output semgrep-results.sarif \
-            --config auto \
+            --config "p/security-audit" \
+            --config "p/php" \
+            --config "p/owasp-top-ten" \
+            --config "p/cwe-top-25" \
+            --verbose \
             app || echo "Semgrep completed with findings"
 
           # Show results count
@@ -241,8 +245,8 @@ jobs:
         run: |
           echo "Starting PHP application for DAST..."
           docker run -d --name test-app \
-            -p 8080:80 \
-            --health-cmd="curl -fs http://localhost:80 || exit 1" \
+            -p 8080:8080 \
+            --health-cmd="curl -fs http://localhost:8080 || exit 1" \
             --health-interval=5s \
             --health-timeout=3s \
             --health-retries=10 \

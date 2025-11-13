@@ -2,9 +2,9 @@ name: Secure PHP CI Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 permissions:
   contents: read
@@ -28,7 +28,7 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.2'
+          php-version: "8.2"
 
       - name: Cache Composer
         uses: actions/cache@v4
@@ -59,18 +59,18 @@ jobs:
         run: |
           python3 -m pip install --user semgrep
           export PATH="$HOME/.local/bin:$PATH"
-          
+
           # Debug: Show what we're scanning
           echo "=== Files to scan ==="
           find app -name "*.php" | head -20
-          
+
           # Run Semgrep ONCE with all configs
           semgrep scan \
             --sarif \
             --output semgrep-results.sarif \
             --config auto \
             app || echo "Semgrep completed with findings"
-          
+
           # Show results count
           echo "=== Semgrep Results ==="
           if [ -f semgrep-results.sarif ]; then
@@ -97,7 +97,7 @@ jobs:
           sarif_file: semgrep-results.sarif
           category: semgrep-php
 
-      # ---------- Trivy (image + fs fallback) ----------
+      # ---------- Trivy (image) ----------
       - name: Build image
         if: ${{ hashFiles('Dockerfile') != '' }}
         run: docker build -t myapp:${{ github.sha }} .
@@ -108,14 +108,6 @@ jobs:
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "${{ github.workspace }}":/w aquasec/trivy:latest image \
             --scanners vuln --severity CRITICAL,HIGH,MEDIUM \
             --format sarif --output /w/trivy-results.sarif myapp:${{ github.sha }}
-          jq -e '.runs[0].results' trivy-results.sarif >/dev/null
-
-      - name: Trivy fs fallback
-        if: ${{ hashFiles('trivy-results.sarif') == '' }}
-        run: |
-          docker run --rm -v "${{ github.workspace }}":/w aquasec/trivy:latest fs \
-            --scanners vuln --severity CRITICAL,HIGH,MEDIUM \
-            --format sarif --output /w/trivy-results.sarif /w
           jq -e '.runs[0].results' trivy-results.sarif >/dev/null
       - name: Upload Trivy
         uses: github/codeql-action/upload-sarif@v3
@@ -170,7 +162,7 @@ jobs:
 
       # ---------- Gitleaks----------
       - name: Gitleaks Secrets Scan
-        continue-on-error: true  
+        continue-on-error: true
         run: |
           docker run --rm \
             -v "${{ github.workspace }}":/repo \
@@ -222,7 +214,7 @@ jobs:
           ls -l gitleaks-results.sarif || echo "⚠️ No SARIF file written"
 
       - name: Upload Gitleaks Results
-        if: always()  # run even if previous step fails
+        if: always() # run even if previous step fails
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks-results.sarif

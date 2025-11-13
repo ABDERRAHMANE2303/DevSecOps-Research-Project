@@ -389,3 +389,138 @@ jobs:
 
           open(os.environ["GITHUB_STEP_SUMMARY"],"w").write(md)
           EOF
+
+      # ---------- DefectDojo Integration (Optional) ----------
+      - name: Upload to DefectDojo
+        if: env.DEFECTDOJO_URL != ''
+        continue-on-error: true
+        env:
+          DEFECTDOJO_URL: ${{ vars.DEFECTDOJO_URL }}
+          DEFECTDOJO_API_KEY: ${{ secrets.DEFECTDOJO_API_KEY }}
+        run: |
+          echo "Uploading security findings to DefectDojo..."
+
+          # Install DefectDojo CLI
+          pip install requests
+
+          # Upload each scan result to DefectDojo
+          python3 - << 'EOF'
+          import os
+          import json
+          import requests
+          from datetime import datetime
+
+          # DefectDojo Configuration
+          DD_URL = os.getenv('DEFECTDOJO_URL', '')
+          DD_API_KEY = os.getenv('DEFECTDOJO_API_KEY', '')
+          DD_PRODUCT_NAME = "DevSecOps-Research-Project"
+          DD_ENGAGEMENT_NAME = f"CI Scan - {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+
+          if not DD_URL or not DD_API_KEY:
+              print("⚠️  DefectDojo not configured. Skipping upload.")
+              exit(0)
+
+          headers = {
+              'Authorization': f'Token {DD_API_KEY}',
+              'Content-Type': 'application/json'
+          }
+
+          def get_or_create_product():
+              """Get or create product in DefectDojo"""
+              # Search for existing product
+              response = requests.get(
+                  f'{DD_URL}/api/v2/products/',
+                  headers=headers,
+                  params={'name': DD_PRODUCT_NAME}
+              )
+              products = response.json().get('results', [])
+              
+              if products:
+                  return products[0]['id']
+              
+              # Create new product
+              response = requests.post(
+                  f'{DD_URL}/api/v2/products/',
+                  headers=headers,
+                  json={
+                      'name': DD_PRODUCT_NAME,
+                      'description': 'PHP web application with DevSecOps pipeline',
+                      'prod_type': 1
+                  }
+              )
+              return response.json()['id']
+
+          def create_engagement(product_id):
+              """Create a new engagement for this scan"""
+              response = requests.post(
+                  f'{DD_URL}/api/v2/engagements/',
+                  headers=headers,
+                  json={
+                      'name': DD_ENGAGEMENT_NAME,
+                      'product': product_id,
+                      'target_start': datetime.now().date().isoformat(),
+                      'target_end': datetime.now().date().isoformat(),
+                      'engagement_type': 'CI/CD',
+                      'status': 'In Progress'
+                  }
+              )
+              return response.json()['id']
+
+          def upload_scan(engagement_id, scan_type, file_path):
+              """Upload scan results to DefectDojo"""
+              if not os.path.exists(file_path):
+                  print(f"⚠️  {file_path} not found, skipping...")
+                  return
+              
+              print(f"📤 Uploading {scan_type} results from {file_path}...")
+              
+              with open(file_path, 'rb') as f:
+                  files = {'file': f}
+                  data = {
+                      'engagement': engagement_id,
+                      'scan_type': scan_type,
+                      'verified': 'false',
+                      'active': 'true',
+                      'minimum_severity': 'Info'
+                  }
+                  
+                  response = requests.post(
+                      f'{DD_URL}/api/v2/import-scan/',
+                      headers={'Authorization': f'Token {DD_API_KEY}'},
+                      files=files,
+                      data=data
+                  )
+                  
+                  if response.status_code == 201:
+                      print(f"✅ {scan_type} uploaded successfully!")
+                  else:
+                      print(f"❌ Failed to upload {scan_type}: {response.text}")
+
+          try:
+              # Get or create product
+              product_id = get_or_create_product()
+              print(f"✅ Product ID: {product_id}")
+              
+              # Create engagement
+              engagement_id = create_engagement(product_id)
+              print(f"✅ Engagement ID: {engagement_id}")
+              
+              # Upload all scan results
+              scans = [
+                  ('Semgrep JSON Report', 'semgrep-results.sarif'),
+                  ('Trivy Scan', 'trivy-results.sarif'),
+                  ('Gitleaks Scan', 'gitleaks-results.sarif'),
+                  ('ZAP Scan', 'report_json.json'),
+              ]
+              
+              for scan_type, file_path in scans:
+                  upload_scan(engagement_id, scan_type, file_path)
+              
+              print(f"\n🎉 All scans uploaded to DefectDojo!")
+              print(f"🔗 View results: {DD_URL}/engagement/{engagement_id}")
+              
+          except Exception as e:
+              print(f"❌ Error uploading to DefectDojo: {e}")
+              import traceback
+              traceback.print_exc()
+          EOF

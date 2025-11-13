@@ -52,9 +52,89 @@ services:
     tmpfs:
       - /tmp
 
+  # DefectDojo - Security Findings Management Platform
+  defectdojo-postgres:
+    image: postgres:13
+    container_name: defectdojo-postgres
+    environment:
+      POSTGRES_DB: defectdojo
+      POSTGRES_USER: defectdojo
+      POSTGRES_PASSWORD: defectdojo
+    volumes:
+      - defectdojo_postgres:/var/lib/postgresql/data
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  defectdojo-redis:
+    image: redis:7-alpine
+    container_name: defectdojo-redis
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  defectdojo:
+    image: defectdojo/defectdojo-django:latest
+    container_name: defectdojo
+    depends_on:
+      - defectdojo-postgres
+      - defectdojo-redis
+    environment:
+      DD_DATABASE_URL: postgresql://defectdojo:defectdojo@defectdojo-postgres:5432/defectdojo
+      DD_CELERY_BROKER_URL: redis://defectdojo-redis:6379/0
+      DD_SECRET_KEY: ChangeThisKeyInProduction
+      DD_CREDENTIAL_AES_256_KEY: ChangeThisKeyInProductionMustBe32Chars!!
+      DD_ALLOWED_HOSTS: "*"
+      DD_DEBUG: "False"
+      DD_ADMIN_USER: admin
+      DD_ADMIN_PASSWORD: admin
+      DD_ADMIN_MAIL: admin@defectdojo.local
+      DD_INITIALIZE: "true"
+    ports:
+      - "8000:8081"
+    volumes:
+      - defectdojo_media:/app/media
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  defectdojo-celery-beat:
+    image: defectdojo/defectdojo-django:latest
+    container_name: defectdojo-celery-beat
+    depends_on:
+      - defectdojo-postgres
+      - defectdojo-redis
+    environment:
+      DD_DATABASE_URL: postgresql://defectdojo:defectdojo@defectdojo-postgres:5432/defectdojo
+      DD_CELERY_BROKER_URL: redis://defectdojo-redis:6379/0
+      DD_SECRET_KEY: ChangeThisKeyInProduction
+      DD_CREDENTIAL_AES_256_KEY: ChangeThisKeyInProductionMustBe32Chars!!
+    command: celery -A dojo beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  defectdojo-celery-worker:
+    image: defectdojo/defectdojo-django:latest
+    container_name: defectdojo-celery-worker
+    depends_on:
+      - defectdojo-postgres
+      - defectdojo-redis
+    environment:
+      DD_DATABASE_URL: postgresql://defectdojo:defectdojo@defectdojo-postgres:5432/defectdojo
+      DD_CELERY_BROKER_URL: redis://defectdojo-redis:6379/0
+      DD_SECRET_KEY: ChangeThisKeyInProduction
+      DD_CREDENTIAL_AES_256_KEY: ChangeThisKeyInProductionMustBe32Chars!!
+    command: celery -A dojo worker -l info --concurrency 3
+    networks:
+      - app-network
+    restart: unless-stopped
+
 networks:
   app-network:
     driver: bridge
 
 volumes:
   db_data:
+  defectdojo_postgres:
+  defectdojo_media:

@@ -1,30 +1,30 @@
-# Trivy Ignore File
-# Ignores specific CVEs that are false positives or accepted risks
-# Review this file quarterly and remove items when fixes become available
+# # Trivy Ignore File
+# # Ignores specific CVEs that are false positives or accepted risks
+# # Review this file quarterly and remove items when fixes become available
 
-# Kernel vulnerabilities in linux-libc-dev that are not exploitable in containers
-# The kernel is managed by the Docker host, not the container
-CVE-2013-7445  # kernel: memory exhaustion via crafted GEM objects - will_not_fix
-CVE-2019-19449 # kernel: f2fs slab-out-of-bounds - fix_deferred
-CVE-2019-19814 # kernel: f2fs out-of-bounds write - affected but not applicable in containers
-CVE-2021-3847  # kernel: low-privileged user privileges escalation - not applicable in containers
-CVE-2021-3864  # kernel: descendant's dumpable setting - not applicable in containers
+# # Kernel vulnerabilities in linux-libc-dev that are not exploitable in containers
+# # The kernel is managed by the Docker host, not the container
+# CVE-2013-7445  # kernel: memory exhaustion via crafted GEM objects - will_not_fix
+# CVE-2019-19449 # kernel: f2fs slab-out-of-bounds - fix_deferred
+# CVE-2019-19814 # kernel: f2fs out-of-bounds write - affected but not applicable in containers
+# CVE-2021-3847  # kernel: low-privileged user privileges escalation - not applicable in containers
+# CVE-2021-3864  # kernel: descendant's dumpable setting - not applicable in containers
 
-# Hardware-specific vulnerabilities not applicable to this deployment
-CVE-2024-25742 # hw: amd: Instruction raise #VC exception - AMD specific
-CVE-2024-25743 # hw: amd: Instruction raise #VC exception - AMD specific
+# # Hardware-specific vulnerabilities not applicable to this deployment
+# CVE-2024-25742 # hw: amd: Instruction raise #VC exception - AMD specific
+# CVE-2024-25743 # hw: amd: Instruction raise #VC exception - AMD specific
 
-# Display driver vulnerabilities (not applicable for headless server)
-CVE-2024-26669 # kernel: net/sched: flower: Fix chain template offload
-CVE-2024-26836 # kernel: platform/x86: think-lmi - Lenovo specific
-CVE-2024-26913 # kernel: drm/amd/display: AMD GPU specific
-CVE-2024-26914 # kernel: drm/amd/display: AMD GPU specific
-CVE-2024-26930 # kernel: scsi: qla2xxx - Specific hardware
-CVE-2024-26944 # kernel: btrfs: zoned - Specific filesystem feature not used
+# # Display driver vulnerabilities (not applicable for headless server)
+# CVE-2024-26669 # kernel: net/sched: flower: Fix chain template offload
+# CVE-2024-26836 # kernel: platform/x86: think-lmi - Lenovo specific
+# CVE-2024-26913 # kernel: drm/amd/display: AMD GPU specific
+# CVE-2024-26914 # kernel: drm/amd/display: AMD GPU specific
+# CVE-2024-26930 # kernel: scsi: qla2xxx - Specific hardware
+# CVE-2024-26944 # kernel: btrfs: zoned - Specific filesystem feature not used
 
-# Uncomment these only after documenting the accepted risk
-# CVE-2025-7458  # CRITICAL: SQLite integer overflow - waiting for upstream fix
-# CVE-2025-6020  # HIGH: Linux-PAM directory traversal - waiting for upstream fix
+# # Uncomment these only after documenting the accepted risk
+# # CVE-2025-7458  # CRITICAL: SQLite integer overflow - waiting for upstream fix
+# # CVE-2025-6020  # HIGH: Linux-PAM directory traversal - waiting for upstream fix
 
-# Review date: 2025-11-13
-# Next review: 2025-12-13
+# # Review date: 2025-11-13
+# # Next review: 2025-12-13

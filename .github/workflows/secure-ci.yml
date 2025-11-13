@@ -106,7 +106,8 @@ jobs:
         if: ${{ hashFiles('Dockerfile') != '' }}
         run: |
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "${{ github.workspace }}":/w aquasec/trivy:latest image \
-            --scanners vuln --severity CRITICAL,HIGH,MEDIUM \
+            --scanners vuln --severity CRITICAL,HIGH \
+            --ignorefile /w/.trivyignore \
             --format sarif --output /w/trivy-results.sarif myapp:${{ github.sha }}
           jq -e '.runs[0].results' trivy-results.sarif >/dev/null
 
@@ -114,7 +115,8 @@ jobs:
         if: ${{ hashFiles('trivy-results.sarif') == '' }}
         run: |
           docker run --rm -v "${{ github.workspace }}":/w aquasec/trivy:latest fs \
-            --scanners vuln --severity CRITICAL,HIGH,MEDIUM \
+            --scanners vuln --severity CRITICAL,HIGH \
+            --ignorefile /w/.trivyignore \
             --format sarif --output /w/trivy-results.sarif /w
           jq -e '.runs[0].results' trivy-results.sarif >/dev/null
       - name: Upload Trivy

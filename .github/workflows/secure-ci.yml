@@ -145,7 +145,7 @@ jobs:
 
       # ---------- tfsec (Terraform present in infrastructure/terraform) ----------
       - name: tfsec
-        if: ${{ hashFiles('infrastructure/terraform/**/*.tf') != '' }}
+        if: ${{ hashFiles('infrastructure/**/*.tf') != '' }}
         run: |
           mkdir -p tfsec-out
           # Run tfsec as the same user as the GitHub runner to avoid permission issues
@@ -153,14 +153,14 @@ jobs:
             -u $(id -u):$(id -g) \
             -v "${{ github.workspace }}":/src \
             -v "${{ github.workspace }}/tfsec-out":/out \
-            tfsec/tfsec:latest /src/infrastructure/terraform \
+            tfsec/tfsec:latest /src/infrastructure \
             --format sarif --out /out/tfsec-results.sarif
 
           # Validate that the SARIF was successfully created
           jq -e '.runs[0].results' tfsec-out/tfsec-results.sarif >/dev/null
 
       - name: Upload tfsec
-        if: ${{ hashFiles('infrastructure/terraform/**/*.tf') != '' }}
+        if: ${{ hashFiles('infrastructure/**/*.tf') != '' }}
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: tfsec-out/tfsec-results.sarif

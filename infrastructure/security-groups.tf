@@ -88,7 +88,7 @@ resource "aws_security_group" "bastion" {
     from_port   = 22
     to_port     = 22
     protocol    = "tcp"
-    cidr_blocks = [var.admin_ip + "/32"]
+    cidr_blocks = ["${var.admin_ip}/32"]
   }
   tags = merge(local.common_tags, { Name = "${local.name_prefix}-bastion-sg" })
 }

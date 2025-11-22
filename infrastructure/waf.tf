@@ -23,11 +23,12 @@ resource "aws_wafv2_web_acl" "app" {
     sampled_requests_enabled   = true
   }
 
+  # Managed rule groups must use override_action
   rule {
     name     = "AWSCommon"
     priority = 1
-    action {
-      block {}
+    override_action {
+      none {}
     }
     statement {
       managed_rule_group_statement {
@@ -45,8 +46,8 @@ resource "aws_wafv2_web_acl" "app" {
   rule {
     name     = "SQLi"
     priority = 2
-    action {
-      block {}
+    override_action {
+      none {}
     }
     statement {
       managed_rule_group_statement {
@@ -64,8 +65,8 @@ resource "aws_wafv2_web_acl" "app" {
   rule {
     name     = "BadInputs"
     priority = 3
-    action {
-      block {}
+    override_action {
+      none {}
     }
     statement {
       managed_rule_group_statement {
@@ -80,6 +81,7 @@ resource "aws_wafv2_web_acl" "app" {
     }
   }
 
+  # Rate limiting is a direct statement → action block is valid
   rule {
     name     = "RateLimit"
     priority = 4
@@ -108,7 +110,7 @@ resource "aws_wafv2_web_acl_association" "alb_assoc" {
 }
 
 resource "aws_wafv2_web_acl_logging_configuration" "waf_logging" {
-  resource_arn = aws_wafv2_web_acl.app.arn
+  resource_arn          = aws_wafv2_web_acl.app.arn
   log_destination_configs = [aws_cloudwatch_log_group.waf.arn]
 }
 

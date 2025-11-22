@@ -7,7 +7,7 @@ variable "region" {
 variable "name_prefix" {
   description = "Prefix this project's resources"
   type        = string
-  default     = "DevSecOpsProject"
+  default     = "devsecopsproject"
 }
 
 variable "azs" {
@@ -23,6 +23,11 @@ variable "admin_ip"{
 
 variable "bastion_key_name" {
   description = "EC2 key pair name to SSH into bastion"
+  type        = string
+}
+
+variable "instances_key_name" {
+  description = "EC2 key pair name used by private app instances (SSH from bastion)"
   type        = string
 }
 

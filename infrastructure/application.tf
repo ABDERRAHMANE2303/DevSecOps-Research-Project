@@ -15,7 +15,7 @@ resource "aws_launch_template" "app" {
   name_prefix   = "${local.name_prefix}-app-"
   image_id      = data.aws_ami.al2.id
   instance_type = "t2.micro"               # Free-tier 
-  key_name      = "bastion-keypair"             # for bastion ssh 
+  key_name      = var.instances_key_name             # key for app instances (SSH from bastion)
 
   iam_instance_profile {
     name = "LabInstanceProfile"            # Use the pre-created LabInstanceProfile in the lab
@@ -41,7 +41,7 @@ resource "aws_launch_template" "app" {
 
               aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REPO"
               docker pull "$REPO:latest"
-              docker run -d --name app --restart=always -p 80:80 "$REPO:latest"
+              docker run -d --name app --restart=always -p 80:8080 "$REPO:latest"
               EOF
   )
 

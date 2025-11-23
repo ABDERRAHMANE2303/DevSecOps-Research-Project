@@ -1,94 +1,43 @@
 <?php
-        # Retrieve settings from Parameter Store
-        error_log('Retrieving settings');
-        
-        # Only load AWS SDK if file exists (for AWS production environment)
-        if (file_exists('aws-autoloader.php')) {
-            require 'aws-autoloader.php';
-        }
-      
-        #$az = file_get_contents('http://169.254.169.254/latest/meta-data/placement/availability-zone');
+// Simplified DB configuration: use provided secret ARN and RDS endpoint.
+error_log('Resolving DB credentials');
 
-        $ch = curl_init();
+if (file_exists('aws-autoloader.php')) {
+  require 'aws-autoloader.php';
+}
 
-        // get a valid TOKEN
-        $headers = array (
-                'X-aws-ec2-metadata-token-ttl-seconds: 21600' );
-        $url = "http://169.254.169.254/latest/api/token";
-        #echo "URL ==> " .  $url;
-        curl_setopt( $ch, CURLOPT_HTTPHEADER, $headers );
-        curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
-        curl_setopt( $ch, CURLOPT_CUSTOMREQUEST, "PUT" );
-        curl_setopt( $ch, CURLOPT_URL, $url );
-        $token = curl_exec( $ch );
-        
-        #echo "<p> TOKEN :" . $token;
-        // then get metadata of the current instance 
-        $headers = array (
-                'X-aws-ec2-metadata-token: '.$token );
-        
-        $url = "http://169.254.169.254/latest/meta-data/placement/availability-zone";
-        
-        curl_setopt( $ch, CURLOPT_URL, $url );
-        curl_setopt( $ch, CURLOPT_HTTPHEADER, $headers );
-        curl_setopt( $ch, CURLOPT_RETURNTRANSFER, true );
-        curl_setopt( $ch, CURLOPT_CUSTOMREQUEST, "GET" );
-        $result = curl_exec( $ch );
-        $az = curl_exec( $ch );
-        
-        #echo "<p> RESULT :" . $result;
+$region = getenv('AWS_REGION') ?: getenv('AWS_DEFAULT_REGION') ?: 'us-east-1';
+$secretArn = getenv('DB_SECRET_ARN') ?: 'arn:aws:secretsmanager:us-east-1:637952570965:secret:devsecopsproject-db-credentials-20251122234228147000000001-en9xBE';
 
-        $region = substr($az, 0, -1);
-        
-        try {
-        // Only try AWS if the SDK is loaded
-        if (class_exists('Aws\SecretsManager\SecretsManagerClient')) {
-            $secrets_client = new Aws\SecretsManager\SecretsManagerClient([
-              'version' => 'latest',
-              'region'  => $region
-            ]);
-            #fetch the endpoint ep
-            $rds_client = new  Aws\Rds\RdsClient([
-              'version' => 'latest',
-              'region'  => $region
-            ]);
-            $dbresult = $rds_client->describeDBInstances();
-            $dbresult = $dbresult['DBInstances'][0]['Endpoint']['Address'];
-            $ep = $dbresult;
-            #echo $ep;
-            #
-            #fetch secrets for the endpoint
-            $secretresults = $secrets_client->listSecrets(array(
-              ['Key'=>['name'],
-              'Values'=>['rds!']
-              ])
-              );
-              $result = $secrets_client->getSecretValue([
-                'SecretId' => $secretresults['SecretList'][0]['Name'],
-            ]);
-            $result = $result['SecretString'];
-            $result = json_decode($result, true);
-      #      echo $result;
+try {
+  if (!class_exists('Aws\SecretsManager\SecretsManagerClient') || !class_exists('Aws\Rds\RdsClient')) {
+    throw new Exception('AWS SDK not loaded');
+  }
+  $secrets_client = new Aws\SecretsManager\SecretsManagerClient([
+    'version' => 'latest',
+    'region'  => $region
+  ]);
+  $rds_client = new Aws\Rds\RdsClient([
+    'version' => 'latest',
+    'region'  => $region
+  ]);
 
-            #$result = $result['SecretString'];
-       #     print($result);
-            #$result = json_decode($result, true);
-            $un = $result['username'];
-            $pw = $result['password'];
-            $db = 'countries';
-        } else {
-            // AWS SDK not available, throw exception to use local credentials
-            throw new Exception('AWS SDK not available');
-        }
+  // Describe DB instances (first one assumed target)
+  $instances = $rds_client->describeDBInstances();
+  $ep = $instances['DBInstances'][0]['Endpoint']['Address'];
 
-        }
-        catch (Exception $e) {
-          // Use Docker environment variables if available, otherwise use localhost
-          $ep = getenv('DB_HOST') ?: 'localhost';
-          $db = getenv('DB_NAME') ?: 'countries';
-          $un = getenv('DB_USER') ?: 'webapp_user';
-          $pw = getenv('DB_PASSWORD') ?: 'your_password';
-        }
-      error_log('Settings are: ' . $ep. " / " . $db . " / " . $un . " / " . $pw);
-      #echo " Check your Database settings ";
-      ?>
+  $secretValue = $secrets_client->getSecretValue(['SecretId' => $secretArn]);
+  $payload = json_decode($secretValue['SecretString'], true);
+  $un = $payload['username'] ?? 'admin';
+  $pw = $payload['password'] ?? '';
+  $db = $payload['dbname'] ?? 'mydb';
+} catch (Exception $e) {
+  // Fallback to environment/local defaults
+  $ep = getenv('DB_HOST') ?: 'localhost';
+  $db = getenv('DB_NAME') ?: 'mydb';
+  $un = getenv('DB_USER') ?: 'webapp_user';
+  $pw = getenv('DB_PASSWORD') ?: 'your_password';
+}
+
+error_log('DB settings: endpoint=' . $ep . ' db=' . $db . ' user=' . $un);
+?>

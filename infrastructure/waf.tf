@@ -109,11 +109,9 @@ resource "aws_wafv2_web_acl_association" "alb_assoc" {
   web_acl_arn  = aws_wafv2_web_acl.app.arn
 }
 
-resource "aws_wafv2_web_acl_logging_configuration" "waf_logging" {
-  resource_arn          = aws_wafv2_web_acl.app.arn
-  log_destination_configs = [aws_cloudwatch_log_group.waf.arn]
-}
-
-output "waf_web_acl_arn" {
-  value = aws_wafv2_web_acl.app.arn
-}
+// WAF logging requires a Kinesis Firehose delivery stream ARN; a CloudWatch Log Group ARN is not valid.
+// Temporarily disabled until a Firehose stream is provisioned.
+// resource "aws_wafv2_web_acl_logging_configuration" "waf_logging" {
+//   resource_arn            = aws_wafv2_web_acl.app.arn
+//   log_destination_configs = [aws_kinesis_firehose_delivery_stream.waf_logs.arn]
+// }

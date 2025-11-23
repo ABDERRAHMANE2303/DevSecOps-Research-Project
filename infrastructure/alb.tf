@@ -48,7 +48,3 @@ resource "aws_lb_listener" "http" {
   }
   tags = merge(local.common_tags, { Name = "${local.name_prefix}-http-listener" })
 }
-
-output "alb_dns_name" {
-  value = aws_lb.app.dns_name
-}

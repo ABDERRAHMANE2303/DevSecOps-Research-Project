@@ -77,9 +77,11 @@ resource "aws_kms_key" "secret" {
 # Secret storing DB connection info (JSON)
 ###################################################################
 resource "aws_secretsmanager_secret" "db" {
-  name       = "${local.name_prefix}-db-credentials"
-  kms_key_id = aws_kms_key.secret.arn
-  tags       = merge(local.common_tags, { Name = "${local.name_prefix}-db-secret" })
+  # Use name_prefix to avoid collision with a previously scheduled-for-deletion secret of same name
+  name_prefix = "${local.name_prefix}-db-credentials-"
+  kms_key_id  = aws_kms_key.secret.arn
+  tags        = merge(local.common_tags, { Name = "${local.name_prefix}-db-secret" })
+  # NOTE: If you want a fixed name, manually cancel deletion: aws secretsmanager cancel-secret-deletion --secret-id ${local.name_prefix}-db-credentials
 }
 
 resource "aws_secretsmanager_secret_version" "db" {

@@ -340,16 +340,16 @@ jobs:
       # Upload SARIF Results to GitHub Security
       # ========================================
       - name: Upload ZAP SARIF Results
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('zap-reports/zap-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: zap-reports/zap-results.sarif
           category: dast-zap-production
         continue-on-error: true
 
       - name: Upload Nuclei SARIF Results
-        if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        if: always() && hashFiles('nuclei-reports/nuclei-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: nuclei-reports/nuclei-results.sarif
           category: dast-nuclei-production
@@ -368,6 +368,7 @@ jobs:
             nuclei-reports/
             nikto-reports/
           retention-days: 30
+          if-no-files-found: warn
 
       # ========================================
       # Generate Summary Report

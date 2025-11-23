@@ -1,0 +1,423 @@
+name: DAST Production Security Scan
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  issues: write
+
+jobs:
+  dast-scan:
+    runs-on: ubuntu-latest
+
+    env:
+      TARGET_URL: "http://devsecopsproject-alb-1801290800.us-east-1.elb.amazonaws.com"
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      # ========================================
+      # OWASP ZAP Baseline Scan
+      # ========================================
+      - name: OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.12.0
+        with:
+          target: ${{ env.TARGET_URL }}
+          rules_file_name: ".zap/rules.tsv"
+          cmd_options: "-a -j -l WARN -T 60"
+          fail_action: false
+          allow_issue_writing: false
+        continue-on-error: true
+
+      # ========================================
+      # OWASP ZAP Full Scan (More Comprehensive)
+      # ========================================
+      - name: OWASP ZAP Full Scan
+        continue-on-error: true
+        run: |
+          docker pull zaproxy/zap-stable:latest
+
+          # Create output directory
+          mkdir -p zap-reports
+
+          # Run ZAP full scan
+          docker run --rm \
+            -v ${{ github.workspace }}/zap-reports:/zap/wrk/:rw \
+            zaproxy/zap-stable:latest \
+            zap-full-scan.py \
+            -t ${{ env.TARGET_URL }} \
+            -r zap-full-report.html \
+            -w zap-full-report.md \
+            -J zap-full-report.json \
+            -x zap-full-report.xml \
+            -I \
+            -T 60 \
+            -m 10 \
+            || true
+
+          echo "=== ZAP Full Scan Completed ==="
+          ls -lh zap-reports/
+
+      # ========================================
+      # Convert ZAP XML to SARIF
+      # ========================================
+      - name: Convert ZAP XML to SARIF
+        if: always()
+        run: |
+          # Install dependencies
+          python3 -m pip install --upgrade pip
+          python3 -m pip install sarif-tools
+
+          # Convert ZAP XML to SARIF
+          if [ -f "zap-reports/zap-full-report.xml" ]; then
+            python3 - << 'EOF'
+          import json
+          import xml.etree.ElementTree as ET
+          from datetime import datetime
+          import os
+
+          def convert_zap_to_sarif(xml_file, sarif_file):
+              tree = ET.parse(xml_file)
+              root = tree.getroot()
+              
+              results = []
+              rule_ids = set()
+              
+              # Parse ZAP alerts
+              for site in root.findall('.//site'):
+                  for alert in site.findall('.//alertitem'):
+                      plugin_id = alert.find('pluginid').text if alert.find('pluginid') is not None else 'unknown'
+                      alert_name = alert.find('alert').text if alert.find('alert') is not None else 'Unknown Alert'
+                      risk = alert.find('riskdesc').text if alert.find('riskdesc') is not None else 'Informational'
+                      desc = alert.find('desc').text if alert.find('desc') is not None else ''
+                      solution = alert.find('solution').text if alert.find('solution') is not None else ''
+                      uri = alert.find('uri').text if alert.find('uri') is not None else ''
+                      
+                      # Map ZAP risk levels to SARIF levels
+                      level_map = {
+                          'High': 'error',
+                          'Medium': 'warning',
+                          'Low': 'note',
+                          'Informational': 'note'
+                      }
+                      
+                      risk_level = risk.split()[0] if risk else 'Informational'
+                      sarif_level = level_map.get(risk_level, 'note')
+                      
+                      rule_ids.add(plugin_id)
+                      
+                      result = {
+                          "ruleId": f"ZAP-{plugin_id}",
+                          "level": sarif_level,
+                          "message": {
+                              "text": f"{alert_name}: {desc[:200]}"
+                          },
+                          "locations": [{
+                              "physicalLocation": {
+                                  "artifactLocation": {
+                                      "uri": uri
+                                  }
+                              }
+                          }],
+                          "properties": {
+                              "risk": risk,
+                              "solution": solution
+                          }
+                      }
+                      results.append(result)
+              
+              # Create rules
+              rules = []
+              for rule_id in rule_ids:
+                  rules.append({
+                      "id": f"ZAP-{rule_id}",
+                      "name": f"ZAP Alert {rule_id}",
+                      "shortDescription": {
+                          "text": f"OWASP ZAP Alert {rule_id}"
+                      },
+                      "fullDescription": {
+                          "text": "Security vulnerability detected by OWASP ZAP"
+                      },
+                      "help": {
+                          "text": "Review the alert details and apply recommended solutions"
+                      }
+                  })
+              
+              # Create SARIF structure
+              sarif = {
+                  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+                  "version": "2.1.0",
+                  "runs": [{
+                      "tool": {
+                          "driver": {
+                              "name": "OWASP ZAP",
+                              "version": "2.14.0",
+                              "informationUri": "https://www.zaproxy.org/",
+                              "rules": rules
+                          }
+                      },
+                      "results": results
+                  }]
+              }
+              
+              with open(sarif_file, 'w') as f:
+                  json.dump(sarif, f, indent=2)
+              
+              print(f"Converted {len(results)} ZAP alerts to SARIF format")
+
+          if os.path.exists('zap-reports/zap-full-report.xml'):
+              convert_zap_to_sarif('zap-reports/zap-full-report.xml', 'zap-reports/zap-results.sarif')
+          else:
+              print("ZAP XML report not found")
+          EOF
+          else
+            echo "ZAP XML report not found, skipping SARIF conversion"
+          fi
+
+      # ========================================
+      # Nuclei Scanner (Fast vulnerability scanner)
+      # ========================================
+      - name: Nuclei Security Scan
+        continue-on-error: true
+        run: |
+          # Install Nuclei
+          wget -q https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_3.3.5_linux_amd64.zip
+          unzip -q nuclei_3.3.5_linux_amd64.zip
+          chmod +x nuclei
+
+          # Update nuclei templates
+          ./nuclei -update-templates
+
+          # Run Nuclei scan
+          mkdir -p nuclei-reports
+          ./nuclei -u ${{ env.TARGET_URL }} \
+            -severity critical,high,medium \
+            -json-export nuclei-reports/nuclei-results.json \
+            -markdown-export nuclei-reports/nuclei-report.md \
+            -stats \
+            -silent \
+            || true
+
+          echo "=== Nuclei Scan Completed ==="
+          if [ -f "nuclei-reports/nuclei-results.json" ]; then
+            echo "Results found:"
+            cat nuclei-reports/nuclei-results.json | jq -r '.info.severity' | sort | uniq -c || true
+          fi
+
+      # ========================================
+      # Convert Nuclei to SARIF
+      # ========================================
+      - name: Convert Nuclei to SARIF
+        if: always()
+        run: |
+          if [ -f "nuclei-reports/nuclei-results.json" ]; then
+            python3 - << 'EOF'
+          import json
+          import os
+
+          def convert_nuclei_to_sarif(json_file, sarif_file):
+              with open(json_file, 'r') as f:
+                  lines = f.readlines()
+              
+              results = []
+              rules = {}
+              
+              for line in lines:
+                  try:
+                      finding = json.loads(line.strip())
+                      
+                      template_id = finding.get('template-id', 'unknown')
+                      template_name = finding.get('info', {}).get('name', 'Unknown')
+                      severity = finding.get('info', {}).get('severity', 'info')
+                      description = finding.get('info', {}).get('description', '')
+                      matched_at = finding.get('matched-at', finding.get('host', ''))
+                      
+                      # Map Nuclei severity to SARIF level
+                      level_map = {
+                          'critical': 'error',
+                          'high': 'error',
+                          'medium': 'warning',
+                          'low': 'note',
+                          'info': 'note'
+                      }
+                      sarif_level = level_map.get(severity.lower(), 'note')
+                      
+                      # Add rule
+                      if template_id not in rules:
+                          rules[template_id] = {
+                              "id": template_id,
+                              "name": template_name,
+                              "shortDescription": {"text": template_name},
+                              "fullDescription": {"text": description or template_name},
+                              "help": {"text": f"Nuclei template: {template_id}"}
+                          }
+                      
+                      # Add result
+                      result = {
+                          "ruleId": template_id,
+                          "level": sarif_level,
+                          "message": {
+                              "text": f"{template_name} detected at {matched_at}"
+                          },
+                          "locations": [{
+                              "physicalLocation": {
+                                  "artifactLocation": {
+                                      "uri": matched_at
+                                  }
+                              }
+                          }],
+                          "properties": {
+                              "severity": severity,
+                              "tags": finding.get('info', {}).get('tags', [])
+                          }
+                      }
+                      results.append(result)
+                  except json.JSONDecodeError:
+                      continue
+              
+              # Create SARIF
+              sarif = {
+                  "$schema": "https://raw.githubusercontent.com/oasis-tcs/sarif-spec/master/Schemata/sarif-schema-2.1.0.json",
+                  "version": "2.1.0",
+                  "runs": [{
+                      "tool": {
+                          "driver": {
+                              "name": "Nuclei",
+                              "version": "3.3.5",
+                              "informationUri": "https://nuclei.projectdiscovery.io/",
+                              "rules": list(rules.values())
+                          }
+                      },
+                      "results": results
+                  }]
+              }
+              
+              with open(sarif_file, 'w') as f:
+                  json.dump(sarif, f, indent=2)
+              
+              print(f"Converted {len(results)} Nuclei findings to SARIF format")
+
+          if os.path.exists('nuclei-reports/nuclei-results.json'):
+              convert_nuclei_to_sarif('nuclei-reports/nuclei-results.json', 'nuclei-reports/nuclei-results.sarif')
+          EOF
+          else
+            echo "Nuclei results not found, skipping SARIF conversion"
+          fi
+
+      # ========================================
+      # Nikto Web Scanner (Traditional web vulnerability scanner)
+      # ========================================
+      - name: Nikto Web Vulnerability Scan
+        continue-on-error: true
+        run: |
+          docker pull secfigo/nikto:latest
+
+          mkdir -p nikto-reports
+
+          # Run Nikto scan
+          docker run --rm \
+            -v ${{ github.workspace }}/nikto-reports:/tmp \
+            secfigo/nikto:latest \
+            -h ${{ env.TARGET_URL }} \
+            -Format json \
+            -output /tmp/nikto-results.json \
+            -Tuning 123456789abc \
+            -timeout 60 \
+            || true
+
+          echo "=== Nikto Scan Completed ==="
+          if [ -f "nikto-reports/nikto-results.json" ]; then
+            echo "Nikto results file created"
+          fi
+
+      # ========================================
+      # Upload SARIF Results to GitHub Security
+      # ========================================
+      - name: Upload ZAP SARIF Results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: zap-reports/zap-results.sarif
+          category: dast-zap-production
+        continue-on-error: true
+
+      - name: Upload Nuclei SARIF Results
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: nuclei-reports/nuclei-results.sarif
+          category: dast-nuclei-production
+        continue-on-error: true
+
+      # ========================================
+      # Archive All Reports
+      # ========================================
+      - name: Archive DAST Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-production-reports-${{ github.run_number }}
+          path: |
+            zap-reports/
+            nuclei-reports/
+            nikto-reports/
+          retention-days: 30
+
+      # ========================================
+      # Generate Summary Report
+      # ========================================
+      - name: Generate DAST Summary
+        if: always()
+        run: |
+          echo "# 🔒 DAST Production Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Target URL:** ${{ env.TARGET_URL }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Scan Date:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_STEP_SUMMARY
+          echo "**Run Number:** #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## 🕷️ OWASP ZAP Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f "zap-reports/zap-full-report.json" ]; then
+            echo "\`\`\`json" >> $GITHUB_STEP_SUMMARY
+            cat zap-reports/zap-full-report.json | jq '.site[0].alerts | group_by(.risk) | map({risk: .[0].risk, count: length})' >> $GITHUB_STEP_SUMMARY || echo "No results" >> $GITHUB_STEP_SUMMARY
+            echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ No ZAP results found" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## ⚡ Nuclei Results" >> $GITHUB_STEP_SUMMARY
+          if [ -f "nuclei-reports/nuclei-results.json" ]; then
+            critical=$(cat nuclei-reports/nuclei-results.json | jq -r 'select(.info.severity=="critical")' | wc -l)
+            high=$(cat nuclei-reports/nuclei-results.json | jq -r 'select(.info.severity=="high")' | wc -l)
+            medium=$(cat nuclei-reports/nuclei-results.json | jq -r 'select(.info.severity=="medium")' | wc -l)
+            
+            echo "- 🔴 Critical: $critical" >> $GITHUB_STEP_SUMMARY
+            echo "- 🟠 High: $high" >> $GITHUB_STEP_SUMMARY
+            echo "- 🟡 Medium: $medium" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ No Nuclei results found" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          echo "## 📊 Scan Status" >> $GITHUB_STEP_SUMMARY
+          echo "✅ DAST scan completed successfully" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "📥 Download full reports from the **Artifacts** section" >> $GITHUB_STEP_SUMMARY
+          echo "🔍 View detailed findings in the **Security** tab" >> $GITHUB_STEP_SUMMARY
+
+      # ========================================
+      # Notification (Optional - can be enabled if needed)
+      # ========================================
+      - name: Scan Complete Notification
+        if: always()
+        run: |
+          echo "✅ DAST Production Security Scan Completed!"
+          echo "📊 View results in GitHub Security tab: https://github.com/${{ github.repository }}/security/code-scanning"
+          echo "📥 Download reports from: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"

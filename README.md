@@ -1,4 +1,4 @@
-# DevSecOps Research Project
+# DevSecOps Research Project 
 
 A PHP-based web application for querying and displaying country statistics including demographics, GDP, life expectancy, and more.
 

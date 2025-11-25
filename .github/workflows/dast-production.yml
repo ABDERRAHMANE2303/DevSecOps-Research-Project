@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      TARGET_URL: "http://devsecopsproject-alb-1801290800.us-east-1.elb.amazonaws.com"
+      TARGET_URL: "http://devsecopsproject-alb-2108130167.us-east-1.elb.amazonaws.com/"
 
     steps:
       - name: Checkout Repository

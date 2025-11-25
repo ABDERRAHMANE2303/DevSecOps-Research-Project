@@ -23,16 +23,24 @@ jobs:
         uses: actions/checkout@v4
 
       # ========================================
+      # Check Target Availability
+      # ========================================
+      - name: Check Target URL is Reachable
+        run: |
+          echo "Testing connection to ${{ env.TARGET_URL }}"
+          curl -I -L --max-time 30 ${{ env.TARGET_URL }} || echo "⚠️ Target may not be reachable"
+
+      # ========================================
       # OWASP ZAP Baseline Scan
       # ========================================
       - name: OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.12.0
         with:
           target: ${{ env.TARGET_URL }}
-          rules_file_name: ".zap/rules.tsv"
-          cmd_options: "-a -j -l WARN -T 60"
+          cmd_options: "-a -j"
           fail_action: false
           allow_issue_writing: false
+          artifact_name: "zap-baseline-report"
         continue-on-error: true
 
       # ========================================
@@ -41,12 +49,13 @@ jobs:
       - name: OWASP ZAP Full Scan
         continue-on-error: true
         run: |
+          echo "Starting ZAP Full Scan..."
           docker pull zaproxy/zap-stable:latest
 
           # Create output directory
           mkdir -p zap-reports
 
-          # Run ZAP full scan
+          # Run ZAP full scan with verbose output
           docker run --rm \
             -v ${{ github.workspace }}/zap-reports:/zap/wrk/:rw \
             zaproxy/zap-stable:latest \
@@ -56,13 +65,15 @@ jobs:
             -w zap-full-report.md \
             -J zap-full-report.json \
             -x zap-full-report.xml \
-            -I \
-            -T 60 \
-            -m 10 \
-            || true
+            -T 120 \
+            -m 5 \
+            2>&1 | tee zap-scan.log || echo "ZAP scan completed with warnings"
 
-          echo "=== ZAP Full Scan Completed ==="
-          ls -lh zap-reports/
+          echo "=== ZAP Scan Output ==="
+          ls -lah zap-reports/ || echo "No reports directory"
+
+          echo "=== ZAP Scan Log ==="
+          cat zap-scan.log || echo "No log file"
 
       # ========================================
       # Convert ZAP XML to SARIF
@@ -186,28 +197,33 @@ jobs:
       - name: Nuclei Security Scan
         continue-on-error: true
         run: |
-          # Install Nuclei
+          echo "Installing Nuclei..."
           wget -q https://github.com/projectdiscovery/nuclei/releases/latest/download/nuclei_3.3.5_linux_amd64.zip
           unzip -q nuclei_3.3.5_linux_amd64.zip
           chmod +x nuclei
 
-          # Update nuclei templates
+          echo "Updating Nuclei templates..."
           ./nuclei -update-templates
 
-          # Run Nuclei scan
+          echo "Running Nuclei scan on ${{ env.TARGET_URL }}"
           mkdir -p nuclei-reports
+
           ./nuclei -u ${{ env.TARGET_URL }} \
-            -severity critical,high,medium \
+            -severity critical,high,medium,low \
             -json-export nuclei-reports/nuclei-results.json \
             -markdown-export nuclei-reports/nuclei-report.md \
-            -stats \
-            -silent \
-            || true
+            -verbose \
+            2>&1 | tee nuclei-scan.log || echo "Nuclei scan completed"
 
-          echo "=== Nuclei Scan Completed ==="
+          echo "=== Nuclei Scan Results ==="
+          ls -lah nuclei-reports/ || echo "No reports directory"
+
           if [ -f "nuclei-reports/nuclei-results.json" ]; then
-            echo "Results found:"
-            cat nuclei-reports/nuclei-results.json | jq -r '.info.severity' | sort | uniq -c || true
+            echo "✅ Results file found"
+            cat nuclei-reports/nuclei-results.json | head -20
+          else
+            echo "❌ No results file created"
+            cat nuclei-scan.log || echo "No log available"
           fi
 
       # ========================================
